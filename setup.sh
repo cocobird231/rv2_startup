@@ -30,10 +30,14 @@ PACKAGE_NAME=NONE
 PACKAGE_ID=NONE
 SETUP_MODE=-1 # 0: create, 1: create-service, 2: remove-service, 3: remove, 4: build, 5: restore-repos, 6: update-repos, 7: update-repo-list, 8: list
 LIST_MODE=NONE # all, repos, scripts, services
+
+
+# Set by input parameters
 CLEAN_FLAG=0
 DEPEND_FLAG=0
 GUI_MODE=0
-USE_DEBUG=0
+SHOW_DEBUG_FLAG=0
+SILENT_MODE=0
 
 
 
@@ -109,7 +113,7 @@ while [[ $# -gt 0 ]]; do
             shift # past argument
             ;;
         --debug)
-            USE_DEBUG=1
+            SHOW_DEBUG_FLAG=1
             shift # past argument
             ;;
     *)
@@ -137,7 +141,8 @@ popd () {
     command popd "$@" > /dev/null
 }
 
-# PrintLog <LEVEL> <msg>; LEVEL: ERROR, SUCC, WARN, INFO, DEBUG
+# PrintLog <LEVEL> <msg>; LEVEL: ERROR, SUCC, WARN, INFO, DEBUG, VAL
+# Do not call this function directly, use PrintError, PrintSuccess, PrintWarning, PrintInfo, PrintDebug, PrintValue instead.
 PrintLog ()
 {
     # No GUI mode
@@ -154,19 +159,34 @@ PrintLog ()
             status_color="\033[1;94m" # Blue
         fi
 
-        if [ -n ${LOG_FILE_PATH} ]; then
-            printf "${status_color}%s${reset_color}\n" "$2" | tee -a ${LOG_FILE_PATH}
-        else
-            printf "${status_color}%s${reset_color}\n" "$2"
+        local str="${status_color}$2${reset_color}\n"
+        if [ -n "${LOG_FILE_PATH}" ]; then
+            printf "${str}" >> "${LOG_FILE_PATH}" 2>&1
+        fi
+        if [ ${SILENT_MODE} -eq 0 ]; then
+            printf "${str}"
         fi
         return
     fi
 
     # GUI mode
-    if [ -n ${LOG_FILE_PATH} ]; then
-        printf "^msg|$1|%s!\n" "$2" | tee -a ${LOG_FILE_PATH}
+    local str=""
+    if [ "$1" == "VAL" ]; then
+        IFS=' ' read -r -a array <<< "$2"
+        str="^val"
+        for i in ${array[@]}; do
+            str="${str}|${i}"
+        done
+        str="${str}!"
     else
-        printf "^msg|$1|%s!\n" "$2"
+        str="^msg|$1|$2!"
+    fi
+
+    if [ -n "${LOG_FILE_PATH}" ]; then
+        printf "%s\n" "${str}" >> "${LOG_FILE_PATH}" 2>&1
+    fi
+    if [ ${SILENT_MODE} -eq 0 ]; then
+        printf "%s\n" "${str}"
     fi
 }
 
@@ -180,7 +200,6 @@ PrintError ()
             PrintLog "ERROR" "$line"
         done
     fi
-
 }
 
 PrintSuccess ()
@@ -222,7 +241,10 @@ PrintInfo ()
 
 PrintDebug ()
 {
-    if [ ${USE_DEBUG} -eq 0 ]; then return; fi
+    local tmp_flag=${SILENT_MODE}
+    if [ ${SHOW_DEBUG_FLAG} -eq 0 ]; then
+        SILENT_MODE=1
+    fi
 
     if [ -n "$1" ]; then
         PrintLog "DEBUG" "$1"
@@ -230,6 +252,19 @@ PrintDebug ()
         while read line
         do
             PrintLog "DEBUG" "$line"
+        done
+    fi
+    SILENT_MODE=${tmp_flag}
+}
+
+PrintValue ()
+{
+    if [ -n "$1" ]; then
+        PrintLog "VAL" "$1"
+    else
+        while read line
+        do
+            PrintLog "VAL" "$line"
         done
     fi
 }
@@ -270,7 +305,7 @@ element_exists ()
 # Check content/scripts
 CheckStartupPackage ()
 {
-    PrintWarning "[CheckStartupPackage] Checking the startup package..."
+    PrintDebug "[CheckStartupPackage] Checking the startup package..."
 
     if [ ! -f "${STARTUP_CONTENT_PATH}/scripts/run-internet-check.sh" ]; then
         PrintError "[CheckStartupPackage] The ${STARTUP_CONTENT_PATH}/scripts/run-internet-check.sh does not exist."
@@ -292,10 +327,9 @@ Init ()
     local date_str=$(date +%Y_%m_%d)
     LOG_FILE_PATH=${STARTUP_LOG_PATH}/${date_str}.log
     mkdir -p ${STARTUP_LOG_PATH}
-    PrintWarning "
+    PrintDebug "
 
-============================================================================"
-    PrintWarning "
+============================================================================
 
     [[[ Script start initializing at $(date -Iseconds) ]]]
 
@@ -388,7 +422,7 @@ Init ()
 # GetROS2WsPackageDict pkg_dict
 GetROS2WsPackageDict ()
 {
-    PrintWarning "[GetROS2WsPackageDict] Getting the ROS2 package list under ${ROS2_WS_SRC_PATH} ..."
+    PrintDebug "[GetROS2WsPackageDict] Getting the ROS2 package list under ${ROS2_WS_SRC_PATH} ..."
     local -n pkg_dict_=$1
     local pkg_xml_files=$(find ${ROS2_WS_SRC_PATH} -type f -iname package.xml)
     for pkg_xml in ${pkg_xml_files}; do
@@ -408,7 +442,7 @@ GetRepoInfoList ()
     local -n desc_arr_=$4
     local -n url_arr_=$5
 
-    PrintWarning "[GetRepoInfoList] Getting the ${repo_type_} info from ${yaml_file_path_} ..."
+    PrintDebug "[GetRepoInfoList] Getting the ${repo_type_} info from ${yaml_file_path_} ..."
 
     # Check repos info
     local repos_info_=$(yaml_repo_info "${yaml_file_path_}" "['${repo_type_}']")
@@ -441,7 +475,7 @@ GetRepoInfoList ()
 
 CheckRepoList ()
 {
-    PrintWarning "[CheckRepoList] Checking the repo list..."
+    PrintDebug "[CheckRepoList] Checking the repo list..."
 
     if [ ! -f "${STARTUP_CONTENT_PATH}/packages.yaml" ]; then
         PrintWarning "[CheckRepoList] The ${STARTUP_CONTENT_PATH}/packages.yaml does not exist. Try updating..."
@@ -494,7 +528,7 @@ CheckRepoList ()
 # The function will create the package file under the ${STARTUP_PKG_SCRIPTS_PATH} with the provided package name and id.
 CreatePackageFile ()
 {
-    PrintWarning "[CreatePackageFile] Creating the package file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
+    PrintDebug "[CreatePackageFile] Creating the package file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
 
     if [[ "${PACKAGE_NAME}" == "NONE" ]]; then
         PrintError "[CreatePackageFile] The package name is not provided."
@@ -555,7 +589,7 @@ CreatePackageFile ()
 # The function requires the sudo permission.
 CreateServiceFile ()
 {
-    PrintWarning "[CreateServiceFile] Creating the service file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
+    PrintDebug "[CreateServiceFile] Creating the service file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
 
     if [[ "${PACKAGE_NAME}" == "NONE" ]]; then
         PrintError "[CreateServiceFile] The package name is not provided."
@@ -695,7 +729,7 @@ CreateServiceFile ()
 # The function requires the sudo permission.
 RemoveServiceFile ()
 {
-    PrintWarning "[RemoveServiceFile] Removing the service file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
+    PrintDebug "[RemoveServiceFile] Removing the service file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
 
     if [[ "${PACKAGE_NAME}" == "NONE" ]]; then
         PrintError "[RemoveServiceFile] The package name is not provided."
@@ -727,7 +761,8 @@ RemoveServiceFile ()
 # The function requires the sudo permission.
 RemovePackageFile ()
 {
-    PrintWarning "[RemovePackageFile] Removing the package file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
+    PrintDebug "[RemovePackageFile] Removing the package file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
+
     if [[ "${PACKAGE_NAME}" == "NONE" ]]; then
         PrintError "[RemovePackageFile] The package name is not provided."
         return 1
@@ -747,7 +782,7 @@ RemovePackageFile ()
 # The function will build ROS2 package under ${ROS2_WS_SRC_PATH} accroding to the ${STARTUP_PKG_SCRIPTS_PATH}
 BuildPackage ()
 {
-    PrintWarning "[BuildPackage] Building the packages..."
+    PrintDebug "[BuildPackage] Building the packages..."
 
     # Get the package list under ${ROS2_WS_SRC_PATH}
     local -A pkg_dict
@@ -761,10 +796,10 @@ BuildPackage ()
     local apt_installed_list=$(apt list --installed 2>/dev/null)
     local pip_installed_list=$(${PYTHON3_PATH} -m pip list 2>/dev/null)
 
-    local created_pkg_paths=$(find ${STARTUP_PKG_SCRIPTS_PATH} -maxdepth 1 -type d)
-    for created_pkg_path in ${created_pkg_paths}; do
+    local pkg_launcher_paths=$(find ${STARTUP_PKG_SCRIPTS_PATH} -maxdepth 1 -type d)
+    for pkg_launcher_path in ${pkg_launcher_paths}; do
         # Get the package name from the directory name: <package_name>_<id>.
-        local pkg_name=$(basename ${created_pkg_path} | grep -Po '^[a-z0-9_]+(?=_.*$)')
+        local pkg_name=$(basename ${pkg_launcher_path} | grep -Po '^[a-z0-9_]+(?=_.*$)')
         if [ -z "${pkg_name}" ]; then continue; fi
 
         # Check if the package exists under ${ROS2_WS_SRC_PATH}
@@ -906,7 +941,7 @@ BuildPackage ()
 # The function will restore the repos to the current commit.
 RestoreRepos ()
 {
-    PrintWarning "[RestoreRepos] Restoring the repos to the current commit..."
+    PrintDebug "[RestoreRepos] Restoring the repos to the current commit..."
 
     CheckRepoList
     if [ $? -ne 0 ]; then
@@ -937,7 +972,7 @@ RestoreRepos ()
 # Function use git clone and pull to update the repos.
 UpdateRepos ()
 {
-    PrintWarning "[UpdateRepos] Updating the repos..."
+    PrintDebug "[UpdateRepos] Updating the repos..."
 
     CheckRepoList
     if [ $? -ne 0 ]; then
@@ -981,7 +1016,8 @@ UpdateRepos ()
 UpdateRepoList ()
 {
     local ftp_server_path=${FTP_SERVER_PATH}/${FTP_SERVER_REPO_VERSION}
-    PrintWarning "[UpdateRepoList] Fetching the latest repo list from the ${FTP_SERVER_PATH} ..."
+    PrintDebug "[UpdateRepoList] Fetching the latest repo list from the ${FTP_SERVER_PATH} ..."
+
     if wget -q -O ${STARTUP_CONTENT_PATH}/packages.yaml ${ftp_server_path}/packages.yaml; then
         PrintSuccess "[UpdateRepoList] The repo list is fetched successfully."
         REPO_NEED_UPDATE=1
@@ -992,8 +1028,146 @@ UpdateRepoList ()
     return 0
 }
 
+# The function will list the package launcher and repos.
+List ()
+{
+    PrintDebug "[List] Listing the package launcher and repos..."
+
+    # ${LIST_MODE}: all, repos, scripts, services
+    if [ "${LIST_MODE}" != "all" ] && [ "${LIST_MODE}" != "repos" ] && [ "${LIST_MODE}" != "scripts" ] && [ "${LIST_MODE}" != "services" ]; then
+        PrintError "[List] The list mode is not valid."
+        return 1
+    fi
+
+    # Set the silent mode
+    SILENT_MODE=1
+
+    # Get the package list under ${ROS2_WS_SRC_PATH}
+    local -A pkg_dict
+    GetROS2WsPackageDict pkg_dict
+    PrintDebug "$(declare -p pkg_dict)"
+
+    # The two dicts describe the package launcher status. Package launcher: <package_name>_<id>
+    # Relation between the package and the repo.
+    local -A pkg_repo_dict # { <package_name>_<id> : <repo_name> }
+    # Whether package launcher have service file.
+    local -A pkg_status_dict # { <package_name>_<id> : {0|1} }
+
+    local pkg_launcher_paths=$(find ${STARTUP_PKG_SCRIPTS_PATH} -maxdepth 1 -type d)
+    for pkg_launcher_path in ${pkg_launcher_paths}; do
+        # Get the package name from the directory name: <package_name>_<id>.
+        local pkg_launcher_name=$(basename ${pkg_launcher_path})
+        local pkg_name=$(echo ${pkg_launcher_name} | grep -Po '^[a-z0-9_]+(?=_.*$)')
+        if [ -z "${pkg_name}" ]; then continue; fi
+
+        # Check if the package exists under ${ROS2_WS_SRC_PATH}
+        if ! element_exists "${pkg_name}" "${!pkg_dict[@]}"; then
+            PrintWarning "[List][${pkg_name}] The package is not found under ${ROS2_WS_SRC_PATH} ."
+            continue
+        fi
+        pkg_repo_dict["${pkg_launcher_name}"]="${pkg_name}"
+
+        # Check if the service file exists
+        if [ -f "${STARTUP_PKG_SERVICES_PATH}/${STARTUP_NAME}_${pkg_launcher_name}.service" ]; then
+            pkg_status_dict["${pkg_launcher_name}"]=1
+        else
+            pkg_status_dict["${pkg_launcher_name}"]=0
+        fi
+    done
+
+    SILENT_MODE=0
+
+    # Print list for 'scripts' and 'services' mode.
+    if [ "${LIST_MODE}" == "scripts" ]; then
+        declare -p pkg_status_dict
+        PrintValue "$(echo ${!pkg_status_dict[@]})"
+        return 0
+    elif [ "${LIST_MODE}" == "services" ]; then
+        local arr_=()
+        for pkg_launcher_name in "${!pkg_status_dict[@]}"; do
+            if [ ${pkg_status_dict["${pkg_launcher_name}"]} -eq 1 ]; then
+                arr_+=("${pkg_launcher_name}")
+            fi
+        done
+        if [ ${#arr_[@]} -gt 0 ]; then
+            PrintValue "$(echo ${arr_[@]})"
+        fi
+        return 0
+    fi
+
+    ######## The following process requires the repo list ########
+
+    SILENT_MODE=1
+    # Check repo list
+    CheckRepoList
+    SILENT_MODE=0
+
+    if [ $? -ne 0 ]; then
+        PrintError "[List] The repo list is not correctly deployed."
+        return 1
+    fi
+
+    # The two dicts are the union of the keys of the pkg_dict, REPO_PKG_NAME_ARR and REPO_INTER_NAME_ARR.
+    local -A repo_tracked_dict # { <repo_name> : {0|1} }
+    local -A repo_fetched_dict # { <repo_name> : {0|1} }
+
+    # repos in ${ROS2_WS_SRC_PATH}
+    for repo_name in "${!pkg_dict[@]}"; do
+        if element_exists "${repo_name}" "${REPO_PKG_NAME_ARR[@]}" || element_exists "${repo_name}" "${REPO_INTER_NAME_ARR[@]}"; then
+            # The repo under ${ROS2_WS_SRC_PATH} is tracked in the repo list and fetched.
+            repo_tracked_dict["${repo_name}"]=1
+            repo_fetched_dict["${repo_name}"]=1
+        else
+            # The repo under ${ROS2_WS_SRC_PATH} is not tracked in the repo list.
+            repo_tracked_dict["${repo_name}"]=0
+            repo_fetched_dict["${repo_name}"]=0
+        fi
+    done
+
+    # repos in ${REPO_PKG_NAME_ARR} and ${REPO_INTER_NAME_ARR}
+    for repo_name in "${REPO_PKG_NAME_ARR[@]}" "${REPO_INTER_NAME_ARR[@]}"; do
+        if ! element_exists "${repo_name}" "${!pkg_dict[@]}"; then
+            # The repo in the repo list is not found under ${ROS2_WS_SRC_PATH}.
+            repo_tracked_dict["${repo_name}"]=1
+            repo_fetched_dict["${repo_name}"]=0
+        fi
+    done
+
+    # Print list for 'all' and 'repos' mode.
+    if [ "${LIST_MODE}" == "repos" ]; then
+        for repo_name in "${!repo_tracked_dict[@]}"; do
+            PrintValue "${repo_name} ${repo_tracked_dict["${repo_name}"]} ${repo_fetched_dict["${repo_name}"]}"
+        done
+    elif [ "${LIST_MODE}" == "all" ]; then
+        local printed_repo_name=()
+        for pkg_launcher_name in "${!pkg_status_dict[@]}"; do
+            local pkg_status=${pkg_status_dict["${pkg_launcher_name}"]}
+            local repo_name=${pkg_repo_dict["${pkg_launcher_name}"]}
+            local repo_tracked=${repo_tracked_dict["${repo_name}"]}
+            local repo_fetched=${repo_fetched_dict["${repo_name}"]}
+            if ! element_exists "${repo_name}" "${printed_repo_name[@]}"; then
+                printed_repo_name+=("${repo_name}")
+            fi
+            PrintValue "${pkg_launcher_name} ${pkg_status} ${repo_name} ${repo_tracked} ${repo_fetched}"
+        done
+
+        for repo_name in "${!repo_tracked_dict[@]}"; do
+            if element_exists "${repo_name}" "${printed_repo_name[@]}"; then
+                continue
+            fi
+            local repo_tracked=${repo_tracked_dict["${repo_name}"]}
+            local repo_fetched=${repo_fetched_dict["${repo_name}"]}
+            PrintValue "- 0 ${repo_name} ${repo_tracked} ${repo_fetched}"
+        done
+    fi
+
+    return 0
+}
 
 
+
+
+####################################################################################################
 
 # Check the startup package
 CheckStartupPackage
@@ -1010,7 +1184,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # 0: create, 1: create-service, 2: remove-service, 3: remove, 4: build, 5: restore-repos, 6: update-repos, 7: update-repo-list, 8: list
-PrintInfo "[Script] Setup mode: ${SETUP_MODE}"
+PrintDebug "[Script] Setup mode: ${SETUP_MODE}"
 
 
 
@@ -1030,6 +1204,8 @@ elif [ ${SETUP_MODE} -eq 6 ]; then
     UpdateRepos
 elif [ ${SETUP_MODE} -eq 7 ]; then
     UpdateRepoList
+elif [ ${SETUP_MODE} -eq 8 ]; then
+    List
 fi
 
 
