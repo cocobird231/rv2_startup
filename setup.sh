@@ -23,11 +23,13 @@ ROS2_WS_PATH=${HOME_PATH}/ros2_ws
 ROS2_WS_SRC_PATH=${ROS2_WS_PATH}/src # Automatically set while ${ROS2_WS_PATH} is set.
 FTP_SERVER_PATH=""
 FTP_SERVER_REPO_VERSION=""
+SHARE_PKG_NAME_REGEX_LIST=()
 
 
 # Input parameters
 PACKAGE_NAME=NONE
 PACKAGE_ID=NONE
+PACKAGE_IS_INTERFACE=0
 SETUP_MODE=-1 # 0: create, 1: create-service, 2: remove-service, 3: remove, 4: build, 5: restore-repos, 6: update-repos, 7: update-repo-list, 8: list
 LIST_MODE=NONE # all, repos, scripts, services
 
@@ -35,8 +37,10 @@ LIST_MODE=NONE # all, repos, scripts, services
 # Set by input parameters
 CLEAN_FLAG=0
 DEPEND_FLAG=0
-GUI_MODE=0
+GUI_MODE_FLAG=0
 SHOW_DEBUG_FLAG=0
+
+# Set by the script
 SILENT_MODE=0
 
 
@@ -46,10 +50,6 @@ REPO_NEED_UPDATE=1 # Start-up and UpdateRepoList will set it to 1.
 REPO_PKG_NAME_ARR=()
 REPO_PKG_DESC_ARR=()
 REPO_PKG_URL_ARR=()
-
-REPO_INTER_NAME_ARR=()
-REPO_INTER_DESC_ARR=()
-REPO_INTER_URL_ARR=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -61,6 +61,10 @@ while [[ $# -gt 0 ]]; do
         --pkg-id)
             PACKAGE_ID=$2
             shift # past argument
+            shift # past argument
+            ;;
+        --pkg-interface)
+            PACKAGE_IS_INTERFACE=1
             shift # past argument
             ;;
         create)
@@ -101,7 +105,7 @@ while [[ $# -gt 0 ]]; do
             shift # past argument
             ;;
         --gui-mode)
-            GUI_MODE=1
+            GUI_MODE_FLAG=1
             shift # past argument
             ;;
         --clean)
@@ -146,7 +150,7 @@ popd () {
 PrintLog ()
 {
     # No GUI mode
-    if [ ${GUI_MODE} -eq 0 ]; then
+    if [ ${GUI_MODE_FLAG} -eq 0 ]; then
         status_color="\033[0m"
         reset_color="\033[0m"
         if [ "$1" == "ERROR" ]; then
@@ -279,13 +283,13 @@ yaml ()
 # yaml_custom_print file_path key
 yaml_custom_print ()
 {
-    python3 -c "import yaml;s=yaml.safe_load(open('$1'))$2;print('|'.join('{}^{}'.format(k,s[k]) for k in s) if isinstance(s, dict) else s)" 2>/dev/null
+    python3 -c "import yaml;s=yaml.safe_load(open('$1'))$2;print('|'.join('{}\`{}'.format(k,s[k]) for k in s) if isinstance(s, dict) else s)" 2>/dev/null
 }
 
-# yaml_repo_info file_path {packages|interfaces}
+# yaml_repo_info file_path {packages}
 yaml_repo_info ()
 {
-    python3 -c "import yaml;s=yaml.safe_load(open('$1'))$2;print('|'.join('{}^{}^{}'.format(r, s[r]['description'], s[r]['url']) for r in s))" 2>/dev/null
+    python3 -c "import yaml;s=yaml.safe_load(open('$1'))$2;print('|'.join('{}\`{}\`{}'.format(r, s[r]['description'], s[r]['url']) for r in s))" 2>/dev/null
 }
 
 element_exists ()
@@ -337,16 +341,18 @@ Init ()
 
     mkdir -p ${STARTUP_PKG_SCRIPTS_PATH}
     mkdir -p ${STARTUP_PKG_SERVICES_PATH}
+    mkdir -p ${STARTUP_TMP_PATH}
 
     # Init paths
     if [ -f "${STARTUP_PATH}/config.yaml" ]; then
-        local yaml_dict_str=$(yaml_custom_print "${STARTUP_PATH}/config.yaml" "")
+        # Environment setup
+        local yaml_dict_str=$(yaml_custom_print "${STARTUP_PATH}/config.yaml" "['ENVIRONMENT_SETUP']")
         if [ -n "${yaml_dict_str}" ]; then
             IFS='|' read -r -a yaml_dict_arr <<< "$yaml_dict_str"
             for yaml_dict in "${yaml_dict_arr[@]}"; do
-                IFS='^' read -r -a yaml_kv_arr <<< "$yaml_dict"
+                IFS='\`' read -r -a yaml_kv_arr <<< "$yaml_dict"
                 if [ ${#yaml_kv_arr[@]} -ne 2 ]; then
-                    PrintWarning "[Init] Invalid yaml config format: ${yaml_dict}. The format should be <key>^<value>."
+                    PrintWarning "[Init] Invalid yaml config format: ${yaml_dict}. The format should be <key>\`<value>."
                     continue
                 fi
 
@@ -363,7 +369,26 @@ Init ()
                 fi
             done
         fi
+
+        # Share package name regex list
+        yaml_dict_str=$(yaml_custom_print "${STARTUP_PATH}/config.yaml" "['ROS2_SHARE_PKG_NAME_REGEX']")
+        if [ -n "${yaml_dict_str}" ]; then
+            IFS='|' read -r -a yaml_dict_arr <<< "$yaml_dict_str"
+            for yaml_dict in "${yaml_dict_arr[@]}"; do
+                IFS='\`' read -r -a yaml_kv_arr <<< "$yaml_dict"
+                if [ ${#yaml_kv_arr[@]} -ne 2 ]; then
+                    PrintWarning "[Init] Invalid yaml config format: ${yaml_dict}. The format should be <key>\`<value>."
+                    continue
+                fi
+                SHARE_PKG_NAME_REGEX_LIST+=("${yaml_kv_arr[1]}")
+            done
+        fi
     fi
+
+    PrintDebug "$(declare -p ROS2_WS_SRC_PATH)"
+    PrintDebug "$(declare -p FTP_SERVER_PATH)"
+    PrintDebug "$(declare -p FTP_SERVER_REPO_VERSION)"
+    PrintDebug "$(declare -p SHARE_PKG_NAME_REGEX_LIST)"
 
     if [ ! -d "${ROS2_WS_SRC_PATH}" ]; then
         PrintWarning "[CheckStartupPackage] The ${ROS2_WS_SRC_PATH} does not exist. Creating..."
@@ -381,7 +406,7 @@ Init ()
 
     local ros_distro=NONE
     # Check Ubuntu release
-    ubuntu_ver=$(lsb_release -r | grep -Po '[\d.]+')
+    local ubuntu_ver=$(lsb_release -r | grep -Po '[\d.]+')
     if [ "$ubuntu_ver" == "20.04" ]
     then
         ros_distro="foxy"
@@ -408,32 +433,49 @@ Init ()
     PrintDebug "[Init] ROS2 distro ${ros_distro} is correctly sourced."
 
     # Set ROS2 default share path
+    if [ ! -d "/opt/ros/${ros_distro}/share" ]; then
+        PrintError "[Init] ROS2 default share path is not found."
+        return 1
+    fi
     ROS2_DEFAULT_SHARE_PATH=/opt/ros/${ros_distro}/share
-    PrintDebug "[Init] ROS2 default share path is set to ${ROS2_DEFAULT_SHARE_PATH}."
-
-    # Create temp directory
-    mkdir -p ${STARTUP_TMP_PATH}
+    PrintDebug "$(declare -p ROS2_DEFAULT_SHARE_PATH)"
 
     PrintSuccess "[Init] The script is initialized successfully."
     return 0
 }
 
 
-# GetROS2WsPackageDict pkg_dict
-GetROS2WsPackageDict ()
+# GetROS2PackageDict pkg_path_dict pkg_islocal_dict
+GetROS2PackageDict ()
 {
-    PrintDebug "[GetROS2WsPackageDict] Getting the ROS2 package list under ${ROS2_WS_SRC_PATH} ..."
-    local -n pkg_dict_=$1
+    local -n pkg_path_dict_=$1
+    local -n pkg_islocal_dict_=$2
+
+    PrintDebug "[GetROS2PackageDict] Search ROS2 package under ${ROS2_WS_SRC_PATH} ..."
     local pkg_xml_files=$(find ${ROS2_WS_SRC_PATH} -type f -iname package.xml)
     for pkg_xml in ${pkg_xml_files}; do
         local pkg_name=$(grep -Po "(?<=<name>)[a-z0-9_]+(?=</name>)" ${pkg_xml})
-        pkg_dict_["${pkg_name}"]=$(dirname ${pkg_xml})
+        pkg_path_dict_["${pkg_name}"]=$(dirname ${pkg_xml})
+        pkg_islocal_dict_["${pkg_name}"]=1
+    done
+
+    PrintDebug "[GetROS2PackageDict] Search ROS2 package under ${ROS2_DEFAULT_SHARE_PATH} ..."
+    pkg_xml_files=$(find ${ROS2_DEFAULT_SHARE_PATH} -maxdepth 2 -type f -iname package.xml)
+    for pkg_xml in ${pkg_xml_files}; do
+        local pkg_name=$(grep -Po "(?<=<name>)[a-z0-9_]+(?=</name>)" ${pkg_xml})
+        for regex in "${SHARE_PKG_NAME_REGEX_LIST[@]}"; do
+            if [[ "${pkg_name}" =~ ${regex} ]]; then
+                pkg_path_dict_["${pkg_name}"]=$(dirname ${pkg_xml})
+                pkg_islocal_dict_["${pkg_name}"]=0
+                break
+            fi
+        done
     done
     return 0
 }
 
 
-# GetRepoInfoList yaml_file_path {packages|interfaces} name_arr desc_arr url_arr
+# GetRepoInfoList yaml_file_path {packages} name_arr desc_arr url_arr
 GetRepoInfoList ()
 {
     local yaml_file_path_=$1
@@ -452,14 +494,14 @@ GetRepoInfoList ()
     fi
 
     while read -r repos_info_str_; do
-        # <repo_name>^<repo_desc>^<repo_url>|<repo_name>^<repo_desc>^<repo_url>|...|<repo_name>^<repo_desc>^<repo_url>
+        # <repo_name>`<repo_desc>`<repo_url>|<repo_name>`<repo_desc>`<repo_url>|...|<repo_name>`<repo_desc>`<repo_url>
         IFS='|' read -r -a repo_info_arr_ <<< "$repos_info_str_"
         PrintDebug "$(declare -p repo_info_arr_)"
         for repo_info_ in "${repo_info_arr_[@]}"; do
-            # <repo_name>^<repo_desc>^<repo_url>
-            IFS='^' read -r -a repo_info_kv_ <<< "$repo_info_"
+            # <repo_name>`<repo_desc>`<repo_url>
+            IFS='\`' read -r -a repo_info_kv_ <<< "$repo_info_"
             if [ ${#repo_info_kv_[@]} -ne 3 ]; then
-                PrintWarning "[GetRepoInfoList] Invalid repo info format: ${repo_info_}. The format should be <name>^<desc>^<url>."
+                PrintWarning "[GetRepoInfoList] Invalid repo info format: ${repo_info_}. The format should be <name>\`<desc>\`<url>."
                 continue
             fi
 
@@ -497,18 +539,9 @@ CheckRepoList ()
         get_status=1
     fi
 
-    GetRepoInfoList "${STARTUP_CONTENT_PATH}/packages.yaml" "interfaces" REPO_INTER_NAME_ARR REPO_INTER_DESC_ARR REPO_INTER_URL_ARR
-    if [ ${#REPO_INTER_NAME_ARR[@]} -eq 0 ] || [ ${#REPO_INTER_NAME_ARR[@]} -ne ${#REPO_INTER_DESC_ARR[@]} ] || [ ${#REPO_INTER_NAME_ARR[@]} -ne ${#REPO_INTER_URL_ARR[@]} ]; then
-        PrintWarning "[CheckRepoList] The interface list is not correctly loaded."
-        get_status=1
-    fi
-
     PrintDebug "$(declare -p REPO_PKG_NAME_ARR)"
     PrintDebug "$(declare -p REPO_PKG_DESC_ARR)"
     PrintDebug "$(declare -p REPO_PKG_URL_ARR)"
-    PrintDebug "$(declare -p REPO_INTER_NAME_ARR)"
-    PrintDebug "$(declare -p REPO_INTER_DESC_ARR)"
-    PrintDebug "$(declare -p REPO_INTER_URL_ARR)"
 
     REPO_NEED_UPDATE=0
     if [ ${get_status} -eq 1 ]; then
@@ -540,17 +573,26 @@ CreatePackageFile ()
         return 1
     fi
 
-    local -A pkg_dict
-    GetROS2WsPackageDict pkg_dict
-    PrintDebug "$(declare -p pkg_dict)"
+    local -A pkg_path_dict
+    local -A pkg_islocal_dict
+    GetROS2PackageDict pkg_path_dict pkg_islocal_dict
+    PrintDebug "$(declare -p pkg_path_dict)"
+    PrintDebug "$(declare -p pkg_islocal_dict)"
 
     local repo_path=""
 
-    if element_exists "${PACKAGE_NAME}" "${!pkg_dict[@]}"; then
-        repo_path=${pkg_dict["${PACKAGE_NAME}"]}
+    if element_exists "${PACKAGE_NAME}" "${!pkg_path_dict[@]}"; then
+        repo_path=${pkg_path_dict["${PACKAGE_NAME}"]}
     else
-        PrintError "[CreatePackageFile] The package ${PACKAGE_NAME} is not found under ${ROS2_WS_SRC_PATH}."
+        PrintError "[CreatePackageFile] The package ${PACKAGE_NAME} is not found under ${ROS2_WS_SRC_PATH} or ${ROS2_DEFAULT_SHARE_PATH} ."
         return 1
+    fi
+
+    if [ ${PACKAGE_IS_INTERFACE} -eq 1 ]; then
+        local pkg_dir=${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}
+        mkdir -p ${pkg_dir}
+        PrintSuccess "[CreatePackageFile] The interface package file created at: ${pkg_dir}."
+        return 0
     fi
 
     # Check the params.yaml and system.yaml
@@ -618,18 +660,23 @@ CreateServiceFile ()
     RemoveServiceFile
 
     # Get the associative array of the ROS2 package name and path
-    local -A pkg_dict
-    GetROS2WsPackageDict pkg_dict
-    PrintDebug "$(declare -p pkg_dict)"
+    local -A pkg_path_dict
+    local -A pkg_islocal_dict
+    GetROS2PackageDict pkg_path_dict pkg_islocal_dict
+    PrintDebug "$(declare -p pkg_path_dict)"
+    PrintDebug "$(declare -p pkg_islocal_dict)"
 
     # The path of the ROS2 package
     local repo_path=""
-    if element_exists "${PACKAGE_NAME}" "${!pkg_dict[@]}"; then
-        repo_path=${pkg_dict["${PACKAGE_NAME}"]}
+    if element_exists "${PACKAGE_NAME}" "${!pkg_path_dict[@]}"; then
+        repo_path=${pkg_path_dict["${PACKAGE_NAME}"]}
     else
-        PrintError "[CreateServiceFile] The package ${PACKAGE_NAME} is not found under ${ROS2_WS_SRC_PATH}."
+        PrintError "[CreateServiceFile] The package ${PACKAGE_NAME} is not found under ${ROS2_WS_SRC_PATH} or ${ROS2_DEFAULT_SHARE_PATH} ."
         return 1
     fi
+
+    # Is the package local or not
+    local is_local=${pkg_islocal_dict["${PACKAGE_NAME}"]}
 
     # Run the custom script if exists
     if [ -f "${repo_path}/scripts/custom.sh" ]; then
@@ -691,7 +738,13 @@ CreateServiceFile ()
 
     # Finish the runfile.sh
     echo "export HOME=${HOME}" >> ${pkg_script_dir}/runfile.sh
-    echo "source ${ROS2_WS_PATH}/install/setup.bash" >> ${pkg_script_dir}/runfile.sh
+
+    if [ ${is_local} -eq 1 ]; then
+        echo "source ${ROS2_WS_PATH}/install/setup.bash" >> ${pkg_script_dir}/runfile.sh
+    else
+        echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ${pkg_script_dir}/runfile.sh
+    fi
+
     echo "ros2 launch ${PACKAGE_NAME} launch.py params_file:=${pkg_script_dir}/params.yaml" >> ${pkg_script_dir}/runfile.sh
     echo "sleep 5" >> ${pkg_script_dir}/runfile.sh
     sudo chmod a+x ${pkg_script_dir}/runfile.sh
@@ -779,18 +832,21 @@ RemovePackageFile ()
     return 0
 }
 
-# The function will build ROS2 package under ${ROS2_WS_SRC_PATH} accroding to the ${STARTUP_PKG_SCRIPTS_PATH}
+# The function will build ROS2 package accroding to the ${STARTUP_PKG_SCRIPTS_PATH}
 BuildPackage ()
 {
     PrintDebug "[BuildPackage] Building the packages..."
 
-    # Get the package list under ${ROS2_WS_SRC_PATH}
-    local -A pkg_dict
-    GetROS2WsPackageDict pkg_dict
-    PrintDebug "$(declare -p pkg_dict)"
+    # Get the associative array of the ROS2 package name and path
+    local -A pkg_path_dict
+    local -A pkg_islocal_dict
+    GetROS2PackageDict pkg_path_dict pkg_islocal_dict
+    PrintDebug "$(declare -p pkg_path_dict)"
+    PrintDebug "$(declare -p pkg_islocal_dict)"
 
     # Get required package list under ${STARTUP_PKG_SCRIPTS_PATH}
-    local selected_pkg_set=()
+    local selected_pkg_set=() # The package selected to run install scripts.
+    local build_pkg_set=() # The package to be built.
 
     # Install dependencies
     local apt_installed_list=$(apt list --installed 2>/dev/null)
@@ -802,9 +858,9 @@ BuildPackage ()
         local pkg_name=$(basename ${pkg_launcher_path} | grep -Po '^[a-z0-9_]+(?=_.*$)')
         if [ -z "${pkg_name}" ]; then continue; fi
 
-        # Check if the package exists under ${ROS2_WS_SRC_PATH}
-        if ! element_exists "${pkg_name}" "${!pkg_dict[@]}"; then
-            PrintWarning "[BuildPackage][${pkg_name}] The package is not found under ${ROS2_WS_SRC_PATH} ."
+        # Check if the package exists under ${ROS2_WS_SRC_PATH} or ${ROS2_DEFAULT_SHARE_PATH}
+        if ! element_exists "${pkg_name}" "${!pkg_path_dict[@]}"; then
+            PrintWarning "[BuildPackage][${pkg_name}] The package is not found under ${ROS2_WS_SRC_PATH} or ${ROS2_DEFAULT_SHARE_PATH} ."
             continue
         fi
 
@@ -814,8 +870,13 @@ BuildPackage ()
         # Add package name to set
         selected_pkg_set+=("${pkg_name}")
 
-        # Dependence list file localtion (under ${ROS2_WS_SRC_PATH}/<package_name>/)
-        local repo_path=${pkg_dict["${pkg_name}"]}
+        # Ignore non-local package
+        if [ ${pkg_islocal_dict["${pkg_name}"]} -eq 1 ]; then
+            build_pkg_set+=("${pkg_name}")
+        fi
+
+        # Dependence list file localtion (under <repo_path>/<package_name>/)
+        local repo_path=${pkg_path_dict["${pkg_name}"]}
         local apt_install_list=()
         local pip_install_list=()
 
@@ -912,7 +973,7 @@ BuildPackage ()
         rm -rf ${build_path} ${inst_path} ${log_path}
     fi
 
-    local pkg_str=$(echo "${selected_pkg_set[@]} ${REPO_INTER_NAME_ARR[@]}") # Add the interface package. Not good enough but works.
+    local pkg_str=$(echo "${build_pkg_set[@]}")
     PrintInfo "[BuildPackage] Building the package: [${pkg_str}]"
     if colcon --log-base ${log_path} build --cmake-args -DPython3_EXECUTABLE="${PYTHON3_PATH}" --build-base ${build_path} --install-base ${inst_path} --base-paths ${ROS2_WS_PATH} --packages-select ${pkg_str} --symlink-install 2>&1 | PrintDebug; then
         PrintSuccess "[BuildPackage] The package is built successfully."
@@ -923,7 +984,7 @@ BuildPackage ()
 
     # Run after build script
     for pkg_name in ${selected_pkg_set[@]}; do
-        local repo_path=${pkg_dict["${pkg_name}"]}
+        local repo_path=${pkg_path_dict["${pkg_name}"]}
         if [ -f "${repo_path}/scripts/script_after_build.sh" ]; then
             PrintInfo "[BuildPackage][${pkg_name}] Found script_after_build.sh under ${repo_path}/scripts . Running..."
             # Pass the repo path to the script.
@@ -951,7 +1012,6 @@ RestoreRepos ()
 
     local repos_name=()
     repos_name+=("${REPO_PKG_NAME_ARR[@]}")
-    repos_name+=("${REPO_INTER_NAME_ARR[@]}")
     for repo_name in ${repos_name[@]}; do
         # Check if the repo is a directory and exist .git directory
         if [ ! -d "${ROS2_WS_SRC_PATH}/${repo_name}/.git" ]; then
@@ -959,9 +1019,9 @@ RestoreRepos ()
             continue
         fi
         pushd ${ROS2_WS_SRC_PATH}/${repo_name}
-        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git restore --staged . --quiet
-        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git restore . --quiet
-        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git clean -fd --quiet
+        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git restore --staged . 2>&1 | PrintDebug
+        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git restore . 2>&1 | PrintDebug
+        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git clean -fd 2>&1 | PrintDebug
         popd
     done
 
@@ -982,11 +1042,9 @@ UpdateRepos ()
     # Read list to array
     local repos_name=()
     repos_name+=("${REPO_PKG_NAME_ARR[@]}")
-    repos_name+=("${REPO_INTER_NAME_ARR[@]}")
 
     local repos_url=()
     repos_url+=("${REPO_PKG_URL_ARR[@]}")
-    repos_url+=("${REPO_INTER_URL_ARR[@]}")
 
     local len=${#repos_name[@]}
     for (( i=0; i<${len}; i++ )); do
@@ -995,7 +1053,7 @@ UpdateRepos ()
         # Check if the repo is a directory and exist .git directory
         if [ ${CLEAN_FLAG} -eq 1 ] || [ ! -d "${ROS2_WS_SRC_PATH}/${repo_name}/.git" ]; then
             rm -rf ${ROS2_WS_SRC_PATH}/${repo_name}
-            git clone ${repo_url} ${ROS2_WS_SRC_PATH}/${repo_name} --quiet
+            git clone ${repo_url} ${ROS2_WS_SRC_PATH}/${repo_name} 2>&1 | PrintDebug
             if [ $? -ne 0 ]; then
                 PrintWarning "[UpdateRepos] The repo ${repo_name} is not correctly cloned."
             fi
@@ -1003,8 +1061,8 @@ UpdateRepos ()
         fi
 
         pushd ${ROS2_WS_SRC_PATH}/${repo_name}
-        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git add .
-        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git pull --quiet
+        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git add . 2>&1 | PrintDebug
+        git --git-dir=${ROS2_WS_SRC_PATH}/${repo_name}/.git pull 2>&1 | PrintDebug
         popd
     done
 
@@ -1042,16 +1100,18 @@ List ()
     # Set the silent mode
     SILENT_MODE=1
 
-    # Get the package list under ${ROS2_WS_SRC_PATH}
-    local -A pkg_dict
-    GetROS2WsPackageDict pkg_dict
-    PrintDebug "$(declare -p pkg_dict)"
+    # Get the associative array of the ROS2 package name and path
+    local -A pkg_path_dict
+    local -A pkg_islocal_dict
+    GetROS2PackageDict pkg_path_dict pkg_islocal_dict
+    PrintDebug "$(declare -p pkg_path_dict)"
+    PrintDebug "$(declare -p pkg_islocal_dict)"
 
     # The two dicts describe the package launcher status. Package launcher: <package_name>_<id>
     # Relation between the package and the repo.
-    local -A pkg_repo_dict # { <package_name>_<id> : <repo_name> }
+    local -A pkg_launcher_dict # { <package_name>_<id> : <pkg_name> }
     # Whether package launcher have service file.
-    local -A pkg_status_dict # { <package_name>_<id> : {0|1} }
+    local -A pkg_launcher_status_dict # { <package_name>_<id> : {0|1} }
 
     local pkg_launcher_paths=$(find ${STARTUP_PKG_SCRIPTS_PATH} -maxdepth 1 -type d)
     for pkg_launcher_path in ${pkg_launcher_paths}; do
@@ -1060,18 +1120,18 @@ List ()
         local pkg_name=$(echo ${pkg_launcher_name} | grep -Po '^[a-z0-9_]+(?=_.*$)')
         if [ -z "${pkg_name}" ]; then continue; fi
 
-        # Check if the package exists under ${ROS2_WS_SRC_PATH}
-        if ! element_exists "${pkg_name}" "${!pkg_dict[@]}"; then
-            PrintWarning "[List][${pkg_name}] The package is not found under ${ROS2_WS_SRC_PATH} ."
+        # Check if the package exists under ${ROS2_WS_SRC_PATH} or ${ROS2_DEFAULT_SHARE_PATH}
+        if ! element_exists "${pkg_name}" "${!pkg_path_dict[@]}"; then
+            PrintWarning "[List][${pkg_name}] The package is not found under ${ROS2_WS_SRC_PATH} or ${ROS2_DEFAULT_SHARE_PATH} ."
             continue
         fi
-        pkg_repo_dict["${pkg_launcher_name}"]="${pkg_name}"
+        pkg_launcher_dict["${pkg_launcher_name}"]="${pkg_name}"
 
         # Check if the service file exists
         if [ -f "${STARTUP_PKG_SERVICES_PATH}/${STARTUP_NAME}_${pkg_launcher_name}.service" ]; then
-            pkg_status_dict["${pkg_launcher_name}"]=1
+            pkg_launcher_status_dict["${pkg_launcher_name}"]=1
         else
-            pkg_status_dict["${pkg_launcher_name}"]=0
+            pkg_launcher_status_dict["${pkg_launcher_name}"]=0
         fi
     done
 
@@ -1079,13 +1139,14 @@ List ()
 
     # Print list for 'scripts' and 'services' mode.
     if [ "${LIST_MODE}" == "scripts" ]; then
-        declare -p pkg_status_dict
-        PrintValue "$(echo ${!pkg_status_dict[@]})"
+        if [ ${#pkg_launcher_status_dict[@]} -gt 0 ]; then
+            PrintValue "$(echo ${!pkg_launcher_status_dict[@]})"
+        fi
         return 0
     elif [ "${LIST_MODE}" == "services" ]; then
         local arr_=()
-        for pkg_launcher_name in "${!pkg_status_dict[@]}"; do
-            if [ ${pkg_status_dict["${pkg_launcher_name}"]} -eq 1 ]; then
+        for pkg_launcher_name in "${!pkg_launcher_status_dict[@]}"; do
+            if [ ${pkg_launcher_status_dict["${pkg_launcher_name}"]} -eq 1 ]; then
                 arr_+=("${pkg_launcher_name}")
             fi
         done
@@ -1107,63 +1168,96 @@ List ()
         return 1
     fi
 
-    # The two dicts are the union of the keys of the pkg_dict, REPO_PKG_NAME_ARR and REPO_INTER_NAME_ARR.
-    local -A repo_tracked_dict # { <repo_name> : {0|1} }
-    local -A repo_fetched_dict # { <repo_name> : {0|1} }
+    # The two dicts are the union of the keys of the ${pkg_path_dict} and ${REPO_PKG_NAME_ARR}
+    local -A repo_tracked_dict # { <pkg_name> : {0|1} }
+    local -A repo_fetched_dict # { <pkg_name> : {0|1} }
 
-    # repos in ${ROS2_WS_SRC_PATH}
-    for repo_name in "${!pkg_dict[@]}"; do
-        if element_exists "${repo_name}" "${REPO_PKG_NAME_ARR[@]}" || element_exists "${repo_name}" "${REPO_INTER_NAME_ARR[@]}"; then
+    # Packages in ${ROS2_WS_SRC_PATH} and ${ROS2_DEFAULT_SHARE_PATH}
+    for pkg_name in "${!pkg_path_dict[@]}"; do
+        if element_exists "${pkg_name}" "${REPO_PKG_NAME_ARR[@]}"; then
             # The repo under ${ROS2_WS_SRC_PATH} is tracked in the repo list and fetched.
-            repo_tracked_dict["${repo_name}"]=1
-            repo_fetched_dict["${repo_name}"]=1
+            repo_tracked_dict["${pkg_name}"]=1
+            repo_fetched_dict["${pkg_name}"]=1
         else
             # The repo under ${ROS2_WS_SRC_PATH} is not tracked in the repo list.
-            repo_tracked_dict["${repo_name}"]=0
-            repo_fetched_dict["${repo_name}"]=0
+            repo_tracked_dict["${pkg_name}"]=0
+            repo_fetched_dict["${pkg_name}"]=0
         fi
     done
 
-    # repos in ${REPO_PKG_NAME_ARR} and ${REPO_INTER_NAME_ARR}
-    for repo_name in "${REPO_PKG_NAME_ARR[@]}" "${REPO_INTER_NAME_ARR[@]}"; do
-        if ! element_exists "${repo_name}" "${!pkg_dict[@]}"; then
+    # Packages in ${REPO_PKG_NAME_ARR}
+    for pkg_name in "${REPO_PKG_NAME_ARR[@]}"; do
+        if ! element_exists "${pkg_name}" "${!pkg_path_dict[@]}"; then
             # The repo in the repo list is not found under ${ROS2_WS_SRC_PATH}.
-            repo_tracked_dict["${repo_name}"]=1
-            repo_fetched_dict["${repo_name}"]=0
+            repo_tracked_dict["${pkg_name}"]=1
+            repo_fetched_dict["${pkg_name}"]=0
         fi
     done
 
     # Print list for 'all' and 'repos' mode.
     if [ "${LIST_MODE}" == "repos" ]; then
-        for repo_name in "${!repo_tracked_dict[@]}"; do
-            PrintValue "${repo_name} ${repo_tracked_dict["${repo_name}"]} ${repo_fetched_dict["${repo_name}"]}"
+        for pkg_name in "${!repo_tracked_dict[@]}"; do
+            PrintValue "${pkg_name} ${repo_tracked_dict["${pkg_name}"]} ${repo_fetched_dict["${pkg_name}"]}"
         done
     elif [ "${LIST_MODE}" == "all" ]; then
-        local printed_repo_name=()
-        for pkg_launcher_name in "${!pkg_status_dict[@]}"; do
-            local pkg_status=${pkg_status_dict["${pkg_launcher_name}"]}
-            local repo_name=${pkg_repo_dict["${pkg_launcher_name}"]}
-            local repo_tracked=${repo_tracked_dict["${repo_name}"]}
-            local repo_fetched=${repo_fetched_dict["${repo_name}"]}
-            if ! element_exists "${repo_name}" "${printed_repo_name[@]}"; then
-                printed_repo_name+=("${repo_name}")
+        local printed_pkg_name=()
+
+        # First print the package launcher
+        for pkg_launcher_name in "${!pkg_launcher_status_dict[@]}"; do
+            local pkg_status=${pkg_launcher_status_dict["${pkg_launcher_name}"]}
+            local pkg_name=${pkg_launcher_dict["${pkg_launcher_name}"]}
+            local repo_tracked=${repo_tracked_dict["${pkg_name}"]}
+            local repo_fetched=${repo_fetched_dict["${pkg_name}"]}
+            if ! element_exists "${pkg_name}" "${printed_pkg_name[@]}"; then
+                printed_pkg_name+=("${pkg_name}")
             fi
-            PrintValue "${pkg_launcher_name} ${pkg_status} ${repo_name} ${repo_tracked} ${repo_fetched}"
+            PrintValue "${pkg_launcher_name} ${pkg_status} ${pkg_name} ${repo_tracked} ${repo_fetched}"
         done
 
-        for repo_name in "${!repo_tracked_dict[@]}"; do
-            if element_exists "${repo_name}" "${printed_repo_name[@]}"; then
+        # Then print rest of the packages
+        for pkg_name in "${!repo_tracked_dict[@]}"; do
+            if element_exists "${pkg_name}" "${printed_pkg_name[@]}"; then
                 continue
             fi
-            local repo_tracked=${repo_tracked_dict["${repo_name}"]}
-            local repo_fetched=${repo_fetched_dict["${repo_name}"]}
-            PrintValue "- 0 ${repo_name} ${repo_tracked} ${repo_fetched}"
+            local repo_tracked=${repo_tracked_dict["${pkg_name}"]}
+            local repo_fetched=${repo_fetched_dict["${pkg_name}"]}
+            PrintValue "- 0 ${pkg_name} ${repo_tracked} ${repo_fetched}"
         done
     fi
 
     return 0
 }
 
+
+SetupModeCheck ()
+{
+    # 0: create, 1: create-service, 2: remove-service, 3: remove, 4: build, 5: restore-repos, 6: update-repos, 7: update-repo-list, 8: list
+    PrintDebug "[SetupModeCheck] Setup mode: ${SETUP_MODE}"
+
+    if [ ${SETUP_MODE} -eq 0 ]; then
+        CreatePackageFile
+    elif [ ${SETUP_MODE} -eq 1 ]; then
+        CreateServiceFile
+    elif [ ${SETUP_MODE} -eq 2 ]; then
+        RemoveServiceFile
+    elif [ ${SETUP_MODE} -eq 3 ]; then
+        RemovePackageFile
+    elif [ ${SETUP_MODE} -eq 4 ]; then
+        BuildPackage
+    elif [ ${SETUP_MODE} -eq 5 ]; then
+        RestoreRepos
+    elif [ ${SETUP_MODE} -eq 6 ]; then
+        UpdateRepos
+    elif [ ${SETUP_MODE} -eq 7 ]; then
+        UpdateRepoList
+    elif [ ${SETUP_MODE} -eq 8 ]; then
+        List
+    else
+        PrintError "[SetupModeCheck] The setup mode is not valid: ${SETUP_MODE}."
+        return 1
+    fi
+    return 0
+}
 
 
 
@@ -1183,29 +1277,9 @@ if [ $? -ne 0 ]; then
     return 1
 fi
 
-# 0: create, 1: create-service, 2: remove-service, 3: remove, 4: build, 5: restore-repos, 6: update-repos, 7: update-repo-list, 8: list
-PrintDebug "[Script] Setup mode: ${SETUP_MODE}"
-
-
-
-if [ ${SETUP_MODE} -eq 0 ]; then
-    CreatePackageFile
-elif [ ${SETUP_MODE} -eq 1 ]; then
-    CreateServiceFile
-elif [ ${SETUP_MODE} -eq 2 ]; then
-    RemoveServiceFile
-elif [ ${SETUP_MODE} -eq 3 ]; then
-    RemovePackageFile
-elif [ ${SETUP_MODE} -eq 4 ]; then
-    BuildPackage
-elif [ ${SETUP_MODE} -eq 5 ]; then
-    RestoreRepos
-elif [ ${SETUP_MODE} -eq 6 ]; then
-    UpdateRepos
-elif [ ${SETUP_MODE} -eq 7 ]; then
-    UpdateRepoList
-elif [ ${SETUP_MODE} -eq 8 ]; then
-    List
+# Check the setup mode
+SetupModeCheck
+if [ $? -ne 0 ]; then
+    PrintError "[Script] The setup mode is not correctly executed."
+    return 1
 fi
-
-
