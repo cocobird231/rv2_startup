@@ -682,7 +682,7 @@ CreateServiceFile ()
     if [ -f "${repo_path}/scripts/custom.sh" ]; then
         PrintInfo "[CreateServiceFile] Found custom script at ${repo_path}/scripts/custom.sh. Running..."
         # Pass the system.yaml path and repo path to the custom script
-        . ${repo_path}/scripts/custom.sh "${system_path}" "${repo_path}"
+        sudo bash ${repo_path}/scripts/custom.sh "${system_path}" "${repo_path}"
         if [ $? -ne 0 ]; then
             PrintError "[CreateServiceFile] The custom script is not correctly executed."
         else
@@ -956,7 +956,7 @@ BuildPackage ()
         if [ -f "${repo_path}/scripts/script_before_build.sh" ]; then
             PrintInfo "[BuildPackage][${pkg_name}] Found script_before_build.sh under ${repo_path}/scripts . Running..."
             # Pass the repo path to the script.
-            . ${repo_path}/scripts/script_before_build.sh ${repo_path} 2>&1 | PrintDebug
+            sudo bash ${repo_path}/scripts/script_before_build.sh ${repo_path} 2>&1 | PrintDebug
             if [ $? -ne 0 ]; then
                 PrintError "[BuildPackage][${pkg_name}] The script_before_build.sh is not correctly executed."
             else
@@ -988,7 +988,7 @@ BuildPackage ()
         if [ -f "${repo_path}/scripts/script_after_build.sh" ]; then
             PrintInfo "[BuildPackage][${pkg_name}] Found script_after_build.sh under ${repo_path}/scripts . Running..."
             # Pass the repo path to the script.
-            . ${repo_path}/scripts/script_after_build.sh ${repo_path} 2>&1 | PrintDebug
+            sudo bash ${repo_path}/scripts/script_after_build.sh ${repo_path} 2>&1 | PrintDebug
             if [ $? -ne 0 ]; then
                 PrintError "[BuildPackage][${pkg_name}] The script_after_build.sh is not correctly executed."
             else
