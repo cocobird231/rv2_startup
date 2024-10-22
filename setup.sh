@@ -29,12 +29,13 @@ SHARE_PKG_NAME_REGEX_LIST=()
 # Input parameters
 PACKAGE_NAME=NONE
 PACKAGE_ID=NONE
-PACKAGE_IS_INTERFACE=0
+PACKAGE_NO_LAUNCH=0
 SETUP_MODE=-1 # 0: create, 1: create-service, 2: remove-service, 3: remove, 4: build, 5: restore-repos, 6: update-repos, 7: update-repo-list, 8: list
 LIST_MODE=NONE # all, repos, scripts, services
 
 
 # Set by input parameters
+ALL_FLAG=0
 CLEAN_FLAG=0
 DEPEND_FLAG=0
 GUI_MODE_FLAG=0
@@ -63,8 +64,8 @@ while [[ $# -gt 0 ]]; do
             shift # past argument
             shift # past argument
             ;;
-        --pkg-interface)
-            PACKAGE_IS_INTERFACE=1
+        --pkg-no-launch)
+            PACKAGE_NO_LAUNCH=1
             shift # past argument
             ;;
         create)
@@ -104,8 +105,8 @@ while [[ $# -gt 0 ]]; do
             LIST_MODE=$2
             shift # past argument
             ;;
-        --gui-mode)
-            GUI_MODE_FLAG=1
+        --all)
+            ALL_FLAG=1
             shift # past argument
             ;;
         --clean)
@@ -114,6 +115,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --depend)
             DEPEND_FLAG=1
+            shift # past argument
+            ;;
+        --gui-mode)
+            GUI_MODE_FLAG=1
             shift # past argument
             ;;
         --debug)
@@ -147,8 +152,7 @@ popd () {
 
 # PrintLog <LEVEL> <msg>; LEVEL: ERROR, SUCC, WARN, INFO, DEBUG, VAL
 # Do not call this function directly, use PrintError, PrintSuccess, PrintWarning, PrintInfo, PrintDebug, PrintValue instead.
-PrintLog ()
-{
+PrintLog () {
     # No GUI mode
     if [ ${GUI_MODE_FLAG} -eq 0 ]; then
         status_color="\033[0m"
@@ -194,8 +198,7 @@ PrintLog ()
     fi
 }
 
-PrintError ()
-{
+PrintError () {
     if [ -n "$1" ]; then
         PrintLog "ERROR" "$1"
     else
@@ -206,8 +209,7 @@ PrintError ()
     fi
 }
 
-PrintSuccess ()
-{
+PrintSuccess () {
     if [ -n "$1" ]; then
         PrintLog "SUCC" "$1"
     else
@@ -218,8 +220,7 @@ PrintSuccess ()
     fi
 }
 
-PrintWarning ()
-{
+PrintWarning () {
     if [ -n "$1" ]; then
         PrintLog "WARN" "$1"
     else
@@ -231,8 +232,7 @@ PrintWarning ()
 }
 
 # Print info
-PrintInfo ()
-{
+PrintInfo () {
     if [ -n "$1" ]; then
         PrintLog "INFO" "$1"
     else
@@ -243,8 +243,7 @@ PrintInfo ()
     fi
 }
 
-PrintDebug ()
-{
+PrintDebug () {
     local tmp_flag=${SILENT_MODE}
     if [ ${SHOW_DEBUG_FLAG} -eq 0 ]; then
         SILENT_MODE=1
@@ -261,8 +260,7 @@ PrintDebug ()
     SILENT_MODE=${tmp_flag}
 }
 
-PrintValue ()
-{
+PrintValue () {
     if [ -n "$1" ]; then
         PrintLog "VAL" "$1"
     else
@@ -307,8 +305,7 @@ element_exists ()
 
 
 # Check content/scripts
-CheckStartupPackage ()
-{
+CheckStartupPackage () {
     PrintDebug "[CheckStartupPackage] Checking the startup package..."
 
     if [ ! -f "${STARTUP_CONTENT_PATH}/scripts/run-internet-check.sh" ]; then
@@ -325,8 +322,7 @@ CheckStartupPackage ()
     return 0
 }
 
-Init ()
-{
+Init () {
     # Set log file path
     local date_str=$(date +%Y_%m_%d)
     LOG_FILE_PATH=${STARTUP_LOG_PATH}/${date_str}.log
@@ -446,8 +442,7 @@ Init ()
 
 
 # GetROS2PackageDict pkg_path_dict pkg_islocal_dict
-GetROS2PackageDict ()
-{
+GetROS2PackageDict () {
     local -n pkg_path_dict_=$1
     local -n pkg_islocal_dict_=$2
 
@@ -476,8 +471,7 @@ GetROS2PackageDict ()
 
 
 # GetRepoInfoList yaml_file_path {packages} name_arr desc_arr url_arr
-GetRepoInfoList ()
-{
+GetRepoInfoList () {
     local yaml_file_path_=$1
     local repo_type_=$2
     local -n name_arr_=$3
@@ -515,8 +509,7 @@ GetRepoInfoList ()
     return 0
 }
 
-CheckRepoList ()
-{
+CheckRepoList () {
     PrintDebug "[CheckRepoList] Checking the repo list..."
 
     if [ ! -f "${STARTUP_CONTENT_PATH}/packages.yaml" ]; then
@@ -559,8 +552,7 @@ CheckRepoList ()
 
 
 # The function will create the package file under the ${STARTUP_PKG_SCRIPTS_PATH} with the provided package name and id.
-CreatePackageFile ()
-{
+CreatePackageFile () {
     PrintDebug "[CreatePackageFile] Creating the package file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
 
     if [[ "${PACKAGE_NAME}" == "NONE" ]]; then
@@ -568,7 +560,7 @@ CreatePackageFile ()
         return 1
     fi
 
-    if [[ "${PACKAGE_ID}" == "NONE" || ! ${PACKAGE_ID} =~ ${VALID_PACKAGE_ID_REGEX} ]]; then
+    if [[ "${PACKAGE_ID}" == "NONE" || ! ${PACKAGE_ID} =~ ${VALID_PACKAGE_ID_REGEX} ]] && [ ${PACKAGE_NO_LAUNCH} -eq 0 ] ; then
         PrintError "[CreatePackageFile] The package id is not provided or invalid."
         return 1
     fi
@@ -588,49 +580,71 @@ CreatePackageFile ()
         return 1
     fi
 
-    if [ ${PACKAGE_IS_INTERFACE} -eq 1 ]; then
-        local pkg_dir=${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}
-        mkdir -p ${pkg_dir}
-        PrintSuccess "[CreatePackageFile] The interface package file created at: ${pkg_dir}."
+    if [ ${PACKAGE_NO_LAUNCH} -eq 1 ]; then
+        local pkg_launcher_path=${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_nolaunch
+        mkdir -p ${pkg_launcher_path}
+        PrintSuccess "[CreatePackageFile] The non-launchable package file created at: ${pkg_launcher_path}."
         return 0
     fi
 
+    # Check the launch files
+    local launch_files=($(find ${repo_path}/launch -type f -name "*.py"))
+    if [ ${#launch_files[@]} -eq 0 ]; then
+        PrintError "[CreatePackageFile] The launch file does not exist under ${repo_path}/launch."
+        return 1
+    else
+        PrintDebug "[CreatePackageFile] Found launch files: ${launch_files[@]}."
+    fi
+
     # Check the params.yaml and system.yaml
-    local params_path=${repo_path}/params/params.yaml
+    local params_files=($(find ${repo_path}/params -type f -name "*.yaml" 2>/dev/null))
+    local use_config=0
+
+    if [ ${#params_files[@]} -eq 0 ]; then
+        PrintWarning "[CreatePackageFile] The parameter file does not exist under ${repo_path}/params."
+        params_files=($(find ${repo_path}/config -type f -name "*.yaml" 2>/dev/null))
+        if [ ${#params_files[@]} -eq 0 ]; then
+            PrintError "[CreatePackageFile] The config file does not exist under ${repo_path}/config."
+            return 1
+        else
+            PrintWarning "[CreatePackageFile] The config file is used instead of the parameter file."
+            use_config=1
+        fi
+    fi
+
+    # Create the package launcher directory
+    local pkg_launcher_path=${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}
+    mkdir -p ${pkg_launcher_path}
+
+    # Copy params or config files to the package directory
+    if [ ${use_config} -eq 1 ]; then
+        cp -r ${repo_path}/config/* ${pkg_launcher_path}
+        touch ${pkg_launcher_path}/.config # Create a flag file to indicate the config files are used.
+    else
+        cp -r ${repo_path}/params/* ${pkg_launcher_path}
+    fi
+
     local system_path=${repo_path}/params/system.yaml
-
-    if [ ! -f "${params_path}" ]; then
-        PrintError "[CreatePackageFile] The ${params_path} does not exist."
-        return 1
-    fi
-
     if [ ! -f "${system_path}" ]; then
-        PrintError "[CreatePackageFile] The ${system_path} does not exist."
-        return 1
+        PrintWarning "[CreatePackageFile] The ${system_path} does not exist. Create a new one under ${pkg_launcher_path} ..."
+        local system_file=${pkg_launcher_path}/system.yaml
+        rm -rf ${system_file} && touch ${system_file}
+        echo "launch:" >> ${system_file}
+        echo "    params: $(basename ${params_files[0]})" >> ${system_file}
+        echo "    launch: $(basename ${launch_files[0]})" >> ${system_file}
+        echo "network:" >> ${system_file}
+        local interfaces=($(ip addr show scope link | grep -P 'BROADCAST,MULTICAST,UP,LOWER_UP' | cut -d ':' -f2 | tr -d ' '))
+        echo "    interface: ${interfaces[0]:-}" >> ${system_file}
+        echo "    internet_required: false" >> ${system_file}
     fi
 
-    # Check launch file
-    local launch_path=${repo_path}/launch/launch.py
-    if [ ! -f "${launch_path}" ]; then
-        PrintError "[CreatePackageFile] The ${launch_path} does not exist."
-        return 1
-    fi
-
-    # Create the package directory
-    local pkg_dir=${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}
-    mkdir -p ${pkg_dir}
-
-    # Copy the params.yaml and system.yaml
-    cp -r ${repo_path}/params/* ${pkg_dir}
-
-    PrintSuccess "[CreatePackageFile] The package file created at: ${pkg_dir}."
+    PrintSuccess "[CreatePackageFile] The package file created at: ${pkg_launcher_path}."
     return 0
 }
 
 # The function will run the custom script and generate service file with given package name and id.
 # The function requires the sudo permission.
-CreateServiceFile ()
-{
+CreateServiceFile () {
     PrintDebug "[CreateServiceFile] Creating the service file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
 
     if [[ "${PACKAGE_NAME}" == "NONE" ]]; then
@@ -643,17 +657,22 @@ CreateServiceFile ()
         return 1
     fi
 
-    local pkg_script_dir=${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}
-    if [ ! -d "${pkg_script_dir}" ]; then
-        PrintError "[CreateServiceFile] The ${pkg_script_dir} does not exist."
+    local pkg_launcher_path=${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}
+    if [ ! -d "${pkg_launcher_path}" ]; then
+        PrintError "[CreateServiceFile] The ${pkg_launcher_path} does not exist."
         return 1
     fi
 
     # Check the system.yaml
-    local system_path=${pkg_script_dir}/system.yaml
+    local system_path=${pkg_launcher_path}/system.yaml
     if [ ! -f "${system_path}" ]; then
         PrintError "[CreateServiceFile] The ${system_path} does not exist."
         return 1
+    fi
+
+    local use_config=0
+    if [ -f "${pkg_launcher_path}/.config" ]; then
+        use_config=1
     fi
 
     # Remove the old service file if exists
@@ -682,7 +701,7 @@ CreateServiceFile ()
     if [ -f "${repo_path}/scripts/custom.sh" ]; then
         PrintInfo "[CreateServiceFile] Found custom script at ${repo_path}/scripts/custom.sh. Running..."
         # Pass the system.yaml path and repo path to the custom script
-        sudo bash ${repo_path}/scripts/custom.sh "${system_path}" "${repo_path}"
+        sudo bash ${repo_path}/scripts/custom.sh "${system_path}" "${repo_path}" 2>&1 | PrintDebug
         if [ $? -ne 0 ]; then
             PrintError "[CreateServiceFile] The custom script is not correctly executed."
         else
@@ -690,9 +709,22 @@ CreateServiceFile ()
         fi
     fi
 
-    # Then create runfile.sh determined by the 'network' scope in the system.yaml and source_env.sh for optional.
-
     # Get system.yaml parameters
+
+    # Get params and launch file names
+    local params_file=$(yaml ${system_path} "['launch']['params']")
+    if [ -z "${params_file}" ]; then
+        PrintError "[CreateServiceFile] The params file is not provided in the ${system_path}."
+        return 1
+    fi
+
+    local launch_file=$(yaml ${system_path} "['launch']['launch']")
+    if [ -z "${launch_file}" ]; then
+        PrintError "[CreateServiceFile] The launch file is not provided in the ${system_path}."
+        return 1
+    fi
+
+    # The interface should be provided
     local interface=$(yaml ${system_path} "['network']['interface']")
     if [ -z "${interface}" ]; then
         PrintError "[CreateServiceFile] The interface is not provided in the ${system_path}."
@@ -721,34 +753,38 @@ CreateServiceFile ()
         return 1
     fi
 
-    # Create runfile.sh under ${pkg_script_dir} determined by the ${use_internet}
+    # Create runfile.sh under ${pkg_launcher_path} determined by the ${use_internet}
     if [ "${use_internet}" == "True" ]; then
-        cp ${STARTUP_CONTENT_PATH}/scripts/run-internet-check.sh ${pkg_script_dir}/runfile.sh
+        cp ${STARTUP_CONTENT_PATH}/scripts/run-internet-check.sh ${pkg_launcher_path}/runfile.sh
     else
-        cp ${STARTUP_CONTENT_PATH}/scripts/run-network-check.sh ${pkg_script_dir}/runfile.sh
+        cp ${STARTUP_CONTENT_PATH}/scripts/run-network-check.sh ${pkg_launcher_path}/runfile.sh
     fi
 
     # Append ${repo_path}/scripts/source_env.sh to the runfile.sh if it exists
     if [ -f "${repo_path}/scripts/source_env.sh" ]; then
         PrintInfo "[CreateServiceFile] Found source_env.sh under ${repo_path}/scripts. Appending to the runfile.sh..."
-        echo "" >> ${pkg_script_dir}/runfile.sh
-        cat ${repo_path}/scripts/source_env.sh >> ${pkg_script_dir}/runfile.sh
-        echo "" >> ${pkg_script_dir}/runfile.sh
+        echo "" >> ${pkg_launcher_path}/runfile.sh
+        cat ${repo_path}/scripts/source_env.sh >> ${pkg_launcher_path}/runfile.sh
+        echo "" >> ${pkg_launcher_path}/runfile.sh
     fi
 
     # Finish the runfile.sh
-    echo "export HOME=${HOME}" >> ${pkg_script_dir}/runfile.sh
+    echo "export HOME=${HOME}" >> ${pkg_launcher_path}/runfile.sh
 
     if [ ${is_local} -eq 1 ]; then
-        echo "source ${ROS2_WS_PATH}/install/setup.bash" >> ${pkg_script_dir}/runfile.sh
+        echo "source ${ROS2_WS_PATH}/install/setup.bash" >> ${pkg_launcher_path}/runfile.sh
     else
-        echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ${pkg_script_dir}/runfile.sh
+        echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ${pkg_launcher_path}/runfile.sh
     fi
 
-    echo "ros2 launch ${PACKAGE_NAME} launch.py params_file:=${pkg_script_dir}/params.yaml" >> ${pkg_script_dir}/runfile.sh
-    echo "sleep 5" >> ${pkg_script_dir}/runfile.sh
-    sudo chmod a+x ${pkg_script_dir}/runfile.sh
-    PrintSuccess "[CreateServiceFile] The runfile.sh created at: ${pkg_script_dir}/runfile.sh."
+    if [ ${use_config} -eq 0 ]; then
+        echo "ros2 launch ${PACKAGE_NAME} ${launch_file} params_file:=${pkg_launcher_path}/${params_file}" >> ${pkg_launcher_path}/runfile.sh
+    else
+        echo "ros2 launch ${PACKAGE_NAME} ${launch_file} config_path:=${pkg_launcher_path}/${params_file}" >> ${pkg_launcher_path}/runfile.sh
+    fi
+    echo "sleep 5" >> ${pkg_launcher_path}/runfile.sh
+    sudo chmod a+x ${pkg_launcher_path}/runfile.sh 2>&1 | PrintDebug
+    PrintSuccess "[CreateServiceFile] The runfile.sh created at: ${pkg_launcher_path}/runfile.sh."
 
     local service_name=${STARTUP_NAME}_${PACKAGE_NAME}_${PACKAGE_ID}
     local service_file=${STARTUP_PKG_SERVICES_PATH}/${service_name}.service
@@ -764,77 +800,123 @@ CreateServiceFile ()
     echo "User=${user_id}" >> ${service_file}
     echo "Group=${user_group}" >> ${service_file}
     echo "Type=simple" >> ${service_file}
-    echo "ExecStart=${pkg_script_dir}/runfile.sh ${interface}" >> ${service_file}
+    echo "ExecStart=${pkg_launcher_path}/runfile.sh ${interface}" >> ${service_file}
     echo "Restart=always" >> ${service_file}
     echo "" >> ${service_file}
     echo "[Install]" >> ${service_file}
     echo "WantedBy=multi-user.target" >> ${service_file}
 
     # Copy service file to /etc/systemd/system and enable the service
-    sudo chmod 644 ${service_file}
-    sudo cp ${service_file} /etc/systemd/system
-    sudo systemctl enable ${service_name}.service
+    sudo chmod 644 ${service_file} 2>&1 | PrintDebug
+    sudo cp ${service_file} /etc/systemd/system 2>&1 | PrintDebug
+
+    # Reload
+    sudo systemctl daemon-reload 2>&1 | PrintDebug
+    sudo systemctl enable ${service_name}.service 2>&1 | PrintDebug
     PrintSuccess "[CreateServiceFile] The service file created at: ${service_file}. The service is enabled."
     return 0
 }
 
-# The function will remove service file and delete service.
-# The function requires the sudo permission.
-RemoveServiceFile ()
+# Call by RemoveServiceFile
+# RemoveServiceFile_ package_name package_id
+RemoveServiceFile_ ()
 {
-    PrintDebug "[RemoveServiceFile] Removing the service file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
+    local service_name=${STARTUP_NAME}_$1_$2
 
-    if [[ "${PACKAGE_NAME}" == "NONE" ]]; then
-        PrintError "[RemoveServiceFile] The package name is not provided."
-        return 1
-    fi
-
-    if [[ "${PACKAGE_ID}" == "NONE" || ! ${PACKAGE_ID} =~ ${VALID_PACKAGE_ID_REGEX} ]]; then
-        PrintError "[RemoveServiceFile] The package id is not provided or invalid."
-        return 1
-    fi
-
-    local service_name=${STARTUP_NAME}_${PACKAGE_NAME}_${PACKAGE_ID}
-
-    if sudo systemctl list-units | grep -Foq "${service_name}.service"; then
-        sudo systemctl stop ${service_name} > /dev/null 2>&1
-        sudo systemctl disable ${service_name} > /dev/null 2>&1
-        sudo rm /etc/systemd/system/${service_name}.service > /dev/null 2>&1
-        PrintSuccess "[RemoveServiceFile] The service ${service_name} is disabled and removed."
+    if sudo systemctl list-unit-files | grep -Foq "${service_name}.service"; then
+        sudo systemctl stop ${service_name} 2>&1 | PrintDebug
+        sudo systemctl disable ${service_name} 2>&1 | PrintDebug
+        sudo rm /etc/systemd/system/${service_name}.service 2>&1 | PrintDebug
+        PrintSuccess "[RemoveServiceFile_] The service ${service_name} is disabled and removed."
     fi
 
     # Remove the service file and runfile.sh
     rm -rf ${STARTUP_PKG_SERVICES_PATH}/${service_name}.service
-    rm -rf ${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}/runfile.sh
-    PrintSuccess "[RemoveServiceFile] The service file and runfile.sh are removed successfully."
+    rm -rf ${STARTUP_PKG_SCRIPTS_PATH}/$1_$2/runfile.sh
+    PrintInfo "[RemoveServiceFile_] The service ${service_name} is removed."
+}
+
+# The function will remove service file and delete service.
+# The function requires the sudo permission.
+RemoveServiceFile () {
+    PrintDebug "[RemoveServiceFile] Removing the service file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
+
+    if [[ "${PACKAGE_NAME}" == "NONE" ]] && [ ${ALL_FLAG} -eq 0 ]; then
+        PrintError "[RemoveServiceFile] The package name is not provided."
+        return 1
+    fi
+
+    if [[ "${PACKAGE_ID}" == "NONE" || ! ${PACKAGE_ID} =~ ${VALID_PACKAGE_ID_REGEX} ]] && [ ${ALL_FLAG} -eq 0 ]; then
+        PrintError "[RemoveServiceFile] The package id is not provided or invalid."
+        return 1
+    fi
+
+    if [ ${ALL_FLAG} -eq 0 ]; then
+        RemoveServiceFile_ ${PACKAGE_NAME} ${PACKAGE_ID}
+    else
+        local service_paths=$(find ${STARTUP_PKG_SERVICES_PATH} -maxdepth 1 -type f -name "*.service")
+        for service_path in ${service_paths}; do
+            local pkg_launcher_name=$(basename ${service_path} | grep -Po "(?<=^${STARTUP_NAME}_)[a-z0-9_]+(?=.service$)")
+            local pkg_name=$(echo ${pkg_launcher_name} | grep -Po "^[a-z0-9_]+(?=_.*$)")
+            local pkg_id=$(echo ${pkg_launcher_name} | grep -Po "(?<=_)[a-z0-9]+$")
+            RemoveServiceFile_ ${pkg_name} ${pkg_id}
+        done
+    fi
+
+
+    # local service_name=${STARTUP_NAME}_${PACKAGE_NAME}_${PACKAGE_ID}
+
+    # if sudo systemctl list-unit-files | grep -Foq "${service_name}.service"; then
+    #     sudo systemctl stop ${service_name} 2>&1 | PrintDebug
+    #     sudo systemctl disable ${service_name} 2>&1 | PrintDebug
+    #     sudo rm /etc/systemd/system/${service_name}.service 2>&1 | PrintDebug
+    #     PrintSuccess "[RemoveServiceFile] The service ${service_name} is disabled and removed."
+    # fi
+
+    # # Remove the service file and runfile.sh
+    # rm -rf ${STARTUP_PKG_SERVICES_PATH}/${service_name}.service
+    # rm -rf ${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}/runfile.sh
+
+    # Reload
+    sudo systemctl daemon-reload 2>&1 | PrintDebug
+
+    PrintSuccess "[RemoveServiceFile] The service files and runfile.sh are removed successfully."
     return 0
 }
 
 # The function will call the RemoveServiceFile() and remove the package directory.
 # The function requires the sudo permission.
-RemovePackageFile ()
-{
+RemovePackageFile () {
     PrintDebug "[RemovePackageFile] Removing the package file: ${PACKAGE_NAME}_${PACKAGE_ID} ..."
 
-    if [[ "${PACKAGE_NAME}" == "NONE" ]]; then
+    if [[ "${PACKAGE_NAME}" == "NONE" ]] && [ ${ALL_FLAG} -eq 0 ]; then
         PrintError "[RemovePackageFile] The package name is not provided."
         return 1
     fi
 
-    if [[ "${PACKAGE_ID}" == "NONE" || ! ${PACKAGE_ID} =~ ${VALID_PACKAGE_ID_REGEX} ]]; then
+    if [[ "${PACKAGE_ID}" == "NONE" || ! ${PACKAGE_ID} =~ ${VALID_PACKAGE_ID_REGEX} ]] && [ ${PACKAGE_NO_LAUNCH} -eq 0 ] && [ ${ALL_FLAG} -eq 0 ] ; then
         PrintError "[RemovePackageFile] The package id is not provided or invalid."
         return 1
     fi
 
-    RemoveServiceFile
-    rm -rf ${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}
-    PrintSuccess "[RemovePackageFile] The package file is removed successfully."
+    if [ ${ALL_FLAG} -eq 0 ]; then
+        if [ ${PACKAGE_NO_LAUNCH} -eq 0 ]; then
+            RemoveServiceFile
+        else
+            PACKAGE_ID="nolaunch"
+        fi
+        rm -rf ${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}
+    else
+        RemoveServiceFile
+        rm -rf ${STARTUP_PKG_SCRIPTS_PATH}/*
+    fi
+
+    PrintSuccess "[RemovePackageFile] The package files are removed successfully."
     return 0
 }
 
 # The function will build ROS2 package accroding to the ${STARTUP_PKG_SCRIPTS_PATH}
-BuildPackage ()
-{
+BuildPackage () {
     PrintDebug "[BuildPackage] Building the packages..."
 
     # Get the associative array of the ROS2 package name and path
@@ -970,6 +1052,7 @@ BuildPackage ()
     local inst_path=(${ROS2_WS_PATH}/install)
     local log_path=(${ROS2_WS_PATH}/log)
     if [ ${CLEAN_FLAG} -eq 1 ]; then
+        PrintWarning "[BuildPackage] Cleaning the build, install and log path..."
         rm -rf ${build_path} ${inst_path} ${log_path}
     fi
 
@@ -1000,8 +1083,7 @@ BuildPackage ()
 }
 
 # The function will restore the repos to the current commit.
-RestoreRepos ()
-{
+RestoreRepos () {
     PrintDebug "[RestoreRepos] Restoring the repos to the current commit..."
 
     CheckRepoList
@@ -1030,8 +1112,7 @@ RestoreRepos ()
 }
 
 # Function use git clone and pull to update the repos.
-UpdateRepos ()
-{
+UpdateRepos () {
     PrintDebug "[UpdateRepos] Updating the repos..."
 
     CheckRepoList
@@ -1071,8 +1152,7 @@ UpdateRepos ()
 }
 
 # The function will update the packages.yaml from the ftp server.
-UpdateRepoList ()
-{
+UpdateRepoList () {
     local ftp_server_path=${FTP_SERVER_PATH}/${FTP_SERVER_REPO_VERSION}
     PrintDebug "[UpdateRepoList] Fetching the latest repo list from the ${FTP_SERVER_PATH} ..."
 
@@ -1087,8 +1167,7 @@ UpdateRepoList ()
 }
 
 # The function will list the package launcher and repos.
-List ()
-{
+List () {
     PrintDebug "[List] Listing the package launcher and repos..."
 
     # ${LIST_MODE}: all, repos, scripts, services
@@ -1229,8 +1308,7 @@ List ()
 }
 
 
-SetupModeCheck ()
-{
+SetupModeCheck () {
     # 0: create, 1: create-service, 2: remove-service, 3: remove, 4: build, 5: restore-repos, 6: update-repos, 7: update-repo-list, 8: list
     PrintDebug "[SetupModeCheck] Setup mode: ${SETUP_MODE}"
 
