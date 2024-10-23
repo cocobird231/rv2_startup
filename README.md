@@ -163,6 +163,7 @@ The package launcher name should be composed of the package name and the ID: `<p
     launch:
         params: "params.yaml"
         launch: "launch.py"
+        use_root: false
 
     network:
         interface: "eth0"

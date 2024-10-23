@@ -632,6 +632,7 @@ CreatePackageFile () {
         echo "launch:" >> ${system_file}
         echo "    params: $(basename ${params_files[0]})" >> ${system_file}
         echo "    launch: $(basename ${launch_files[0]})" >> ${system_file}
+        echo "    use_root: false" >> ${system_file}
         echo "network:" >> ${system_file}
         local interfaces=($(ip addr show scope link | grep -P 'BROADCAST,MULTICAST,UP,LOWER_UP' | cut -d ':' -f2 | tr -d ' '))
         echo "    interface: ${interfaces[0]:-}" >> ${system_file}
@@ -724,6 +725,12 @@ CreateServiceFile () {
         return 1
     fi
 
+    local use_root=$(yaml ${system_path} "['launch']['use_root']")
+    if [ -z "${use_root}" ]; then
+        PrintWarning "[CreateServiceFile] The use_root is not provided in the ${system_path}. Default to False."
+        use_root=False
+    fi
+
     # The interface should be provided
     local interface=$(yaml ${system_path} "['network']['interface']")
     if [ -z "${interface}" ]; then
@@ -797,8 +804,12 @@ CreateServiceFile () {
     echo "Description=${service_name}" >> ${service_file}
     echo "" >> ${service_file}
     echo "[Service]" >> ${service_file}
-    echo "User=${user_id}" >> ${service_file}
-    echo "Group=${user_group}" >> ${service_file}
+
+    if [ "${use_root}" == "False" ]; then # If user and group not specified, systemd runs the service as root.
+        echo "User=${user_id}" >> ${service_file}
+        echo "Group=${user_group}" >> ${service_file}
+    fi
+
     echo "Type=simple" >> ${service_file}
     echo "ExecStart=${pkg_launcher_path}/runfile.sh ${interface}" >> ${service_file}
     echo "Restart=always" >> ${service_file}
@@ -863,20 +874,6 @@ RemoveServiceFile () {
         done
     fi
 
-
-    # local service_name=${STARTUP_NAME}_${PACKAGE_NAME}_${PACKAGE_ID}
-
-    # if sudo systemctl list-unit-files | grep -Foq "${service_name}.service"; then
-    #     sudo systemctl stop ${service_name} 2>&1 | PrintDebug
-    #     sudo systemctl disable ${service_name} 2>&1 | PrintDebug
-    #     sudo rm /etc/systemd/system/${service_name}.service 2>&1 | PrintDebug
-    #     PrintSuccess "[RemoveServiceFile] The service ${service_name} is disabled and removed."
-    # fi
-
-    # # Remove the service file and runfile.sh
-    # rm -rf ${STARTUP_PKG_SERVICES_PATH}/${service_name}.service
-    # rm -rf ${STARTUP_PKG_SCRIPTS_PATH}/${PACKAGE_NAME}_${PACKAGE_ID}/runfile.sh
-
     # Reload
     sudo systemctl daemon-reload 2>&1 | PrintDebug
 
@@ -916,6 +913,7 @@ RemovePackageFile () {
 }
 
 # The function will build ROS2 package accroding to the ${STARTUP_PKG_SCRIPTS_PATH}
+# The function requires the sudo permission.
 BuildPackage () {
     PrintDebug "[BuildPackage] Building the packages..."
 
@@ -1053,7 +1051,7 @@ BuildPackage () {
     local log_path=(${ROS2_WS_PATH}/log)
     if [ ${CLEAN_FLAG} -eq 1 ]; then
         PrintWarning "[BuildPackage] Cleaning the build, install and log path..."
-        rm -rf ${build_path} ${inst_path} ${log_path}
+        sudo rm -rf ${build_path} ${inst_path} ${log_path}
     fi
 
     local pkg_str=$(echo "${build_pkg_set[@]}")
