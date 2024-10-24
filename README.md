@@ -203,6 +203,10 @@ The package launcher name should be composed of the package name and the ID: `<p
     ```
     The package launcher directory `<package_name>_<id>` will be removed from the `rv2_startup/launch/scripts`, and the service will be removed, the service file `rv2_startup_<package_name>_<id>.service` will be removed from the `rv2_startup/launch/services`.
 
+    **NOTE**: If want to keep the package launcher directory, use the `remove-service` command instead of `remove` to remove the service only.
+
+    **NOTE**: If want to remove all the package launchers, use the `--all` flag instead of `--pkg-name` and `--pkg-id`.
+
 ### Re-create a `systemd` Service
 If the package launcher directory `<package_name>_<id>` exists, run the following command to re-create the service.
 ```bash
@@ -264,11 +268,19 @@ packages:
     rv2_package_example:
         description: "RV2 Example Package"
         url: "https://github.com/cocobird231/rv2_package_example.git"
+        packages:
+            - rv2_package_example
 
-    <package_name>:
+    <repo_name>:
         description: "Some description"
         url: "<git repository url>"
+        packages:
+            - <package_name>
+            - <package_name2>
+            - <package_name3>
 ```
+**NOTE**: The `<repo_name>` will be the directory name while fetching the repository into the ROS2 workspace source directory.
+
 **NOTE**: The `<package_name>` should be the ROS2 package name defined in the `package.xml`.
 
 **NOTE**: If the `packages.yaml` is customized, do not run the `update-repo-list` command, or the file will be overwritten.
@@ -277,17 +289,17 @@ packages:
 ### Commands
 - **`--pkg-name <package_name>`**:
 
-    The name of the ROS2 package (Defined in `package.xml`).
+    The name of the ROS2 package (Defined in `package.xml`). The name should follow the regular expression `[a-z0-9_-]+`.
 
 - **`--pkg-id <id>`**:
 
-    The ID of the package launcher. The ID must fit the regular expression `[a-zA-Z0-9\.]+`.
+    The unique ID of the package launcher. The ID must fit the regular expression `[a-zA-Z0-9\.]+`. The ID should follow the regular expression `[a-zA-Z0-9\.]+`.
 
 - **`--pkg-no-launch`**:
 
-    Set the flag if `<package_name>` package is not for launch. The package will be built under ROS2 workspace if it is a local package.
+    Set the flag if `<package_name>` package is not for launch. The `--pkg-id` flag is not required if the flag is provided, and the package launcher name will be `<package_name>_nolaunch`.
 
-    **WARNING**: The package will not create a service since the package is not a launchable package.
+    **WARNING**: The package can not create a service since the package is not a launchable package.
 
 - **`create {--pkg-name <package_name>} {--pkg-id <id>|--pkg-no-launch}`**:
 
@@ -303,6 +315,10 @@ packages:
     3. Create a systemd service file `rv2_startup_<package_name>_<id>.service` in the `rv2_startup/launch/services` directory.
 
     **WARNING**: The `system.yaml` file should be placed in the package launcher directory, and the `network` field should be set properly.
+
+    **WARNING**: The command does not support the non-launchable package (package created with `--pkg-no-launch` flag).
+
+    **WARNING**: The command will remove the service if the service already exists. The service will be enabled after service creation.
 
 - **`remove-service {{--pkg-name <package_name>} {--pkg-id <id>}|--all}`**:
 
@@ -347,21 +363,27 @@ packages:
 
     **WARNING**: The `FTP_SERVER_PATH` and `FTP_SERVER_REPO_VERSION` should be set properly in the `config.yaml` file.
 
-- **`list {all|repos|scripts|services}`**:
+- **`list {all|pkgs|scripts|services}`**:
 
     List the package launchers and repositories.
 
-    - **`all`**: List all the package launchers and repositories. The printed information: `<pkg_launcher_name> <pkg_launcher_status> <package_name> <repo_tracked> <repo_fetched>`
+    - **`all`**: List all the package launchers and repositories. The printed information: `<pkg_launcher_name> <pkg_launcher_status> <package_name> <package_status>`
         - `<pkg_launcher_name>` (string): The package launcher directory.
         - `<pkg_launcher_status>` (0|1): 0 for no service, 1 for service installed.
         - `<package_name>` (string): The ROS2 package name.
-        - `<repo_tracked>` (0|1): 0 for not tracked, 1 for tracked.
-        - `<repo_fetched>` (0|1): 0 for not fetched, 1 for fetched.
+        - `<package_status>` (0|1|2|3):
+            - 0: Package in global share.
+            - 1: Custom package in local src.
+            - 2: Package tracked (in packages.yaml) but not fetched.
+            - 3: Package fetched.
 
-    - **`repos`**: List the repositories. The printed information: `<package_name> <repo_tracked> <repo_fetched>`
+    - **`pkgs`**: List the repositories. The printed information: `<package_name> <package_status>`
         - `<package_name>` (string): The ROS2 package name.
-        - `<repo_tracked>` (0|1): 0 for not tracked, 1 for tracked.
-        - `<repo_fetched>` (0|1): 0 for not fetched, 1 for fetched.
+        - `<package_status>` (0|1|2|3):
+            - 0: Package in global share.
+            - 1: Custom package in local src.
+            - 2: Package tracked (in packages.yaml) but not fetched.
+            - 3: Package fetched.
 
     - **`scripts`**: List the package launchers. The printed information: `<pkg_launcher_name> ... <pkg_launcher_name>`
 

@@ -10,6 +10,7 @@ STARTUP_PKG_SCRIPTS_PATH=${STARTUP_PATH}/launch/scripts
 STARTUP_PKG_SERVICES_PATH=${STARTUP_PATH}/launch/services
 STARTUP_TMP_PATH=${STARTUP_PATH}/.tmp
 
+VALID_PACKAGE_REGEX='[a-z0-9_-]+'
 VALID_PACKAGE_ID_REGEX='[a-zA-Z0-9\.]+'
 
 
@@ -31,8 +32,18 @@ PACKAGE_NAME=NONE
 PACKAGE_ID=NONE
 PACKAGE_NO_LAUNCH=0
 SETUP_MODE=-1 # 0: create, 1: create-service, 2: remove-service, 3: remove, 4: build, 5: restore-repos, 6: update-repos, 7: update-repo-list, 8: list
-LIST_MODE=NONE # all, repos, scripts, services
+LIST_MODE=NONE # all, pkgs, scripts, services.
+# Package status:
+# 8 4 2 1
+# - - - 0: Package not in local src.
+# - - - 1: Pacakge in local src.
+# - - 0 -: Package not in packages.yaml.
+# - - 1 -: Package in packages.yaml. (tracked)
 
+# - - 0 0: Package in global share.
+# - - 0 1: Custom package in local src.
+# - - 1 0: Package tracked but not fetched.
+# - - 1 1: Package fetched.
 
 # Set by input parameters
 ALL_FLAG=0
@@ -44,13 +55,10 @@ SHOW_DEBUG_FLAG=0
 # Set by the script
 SILENT_MODE=0
 
-
-
-# Repo arr will be set by the CheckRepoList()
-REPO_NEED_UPDATE=1 # Start-up and UpdateRepoList will set it to 1.
-REPO_PKG_NAME_ARR=()
-REPO_PKG_DESC_ARR=()
-REPO_PKG_URL_ARR=()
+unset REPO_DESC_ARR REPO_URL_ARR PKG_REPO_ARR
+declare -A REPO_DESC_ARR # { <repo_name> : <repo_desc> }
+declare -A REPO_URL_ARR # { <repo_name> : <repo_url> }
+declare -A PKG_REPO_ARR # { <pkg_name> : <repo_name> }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -130,15 +138,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-
-
-
-
-
-
-
-
 
 
 
@@ -287,7 +286,7 @@ yaml_custom_print ()
 # yaml_repo_info file_path {packages}
 yaml_repo_info ()
 {
-    python3 -c "import yaml;s=yaml.safe_load(open('$1'))$2;print('|'.join('{}\`{}\`{}'.format(r, s[r]['description'], s[r]['url']) for r in s))" 2>/dev/null
+    python3 -c "import yaml;s=yaml.safe_load(open('$1'))$2;print('|'.join('{}\`{}\`{}\`{}'.format(k, s[k]['description'], s[k]['url'], '\`'.join(s[k]['packages'])) for k in s))" 2>/dev/null
 }
 
 element_exists ()
@@ -329,11 +328,8 @@ Init () {
     mkdir -p ${STARTUP_LOG_PATH}
     PrintDebug "
 
-============================================================================
 
-    [[[ Script start initializing at $(date -Iseconds) ]]]
-
-"
+        [[[ Script start initializing at $(date -Iseconds) ]]]"
 
     mkdir -p ${STARTUP_PKG_SCRIPTS_PATH}
     mkdir -p ${STARTUP_PKG_SERVICES_PATH}
@@ -449,7 +445,7 @@ GetROS2PackageDict () {
     PrintDebug "[GetROS2PackageDict] Search ROS2 package under ${ROS2_WS_SRC_PATH} ..."
     local pkg_xml_files=$(find ${ROS2_WS_SRC_PATH} -type f -iname package.xml)
     for pkg_xml in ${pkg_xml_files}; do
-        local pkg_name=$(grep -Po "(?<=<name>)[a-z0-9_]+(?=</name>)" ${pkg_xml})
+        local pkg_name=$(grep -Po "(?<=<name>)${VALID_PACKAGE_REGEX}(?=</name>)" ${pkg_xml})
         pkg_path_dict_["${pkg_name}"]=$(dirname ${pkg_xml})
         pkg_islocal_dict_["${pkg_name}"]=1
     done
@@ -457,7 +453,7 @@ GetROS2PackageDict () {
     PrintDebug "[GetROS2PackageDict] Search ROS2 package under ${ROS2_DEFAULT_SHARE_PATH} ..."
     pkg_xml_files=$(find ${ROS2_DEFAULT_SHARE_PATH} -maxdepth 2 -type f -iname package.xml)
     for pkg_xml in ${pkg_xml_files}; do
-        local pkg_name=$(grep -Po "(?<=<name>)[a-z0-9_]+(?=</name>)" ${pkg_xml})
+        local pkg_name=$(grep -Po "(?<=<name>)${VALID_PACKAGE_REGEX}(?=</name>)" ${pkg_xml})
         for regex in "${SHARE_PKG_NAME_REGEX_LIST[@]}"; do
             if [[ "${pkg_name}" =~ ${regex} ]]; then
                 pkg_path_dict_["${pkg_name}"]=$(dirname ${pkg_xml})
@@ -469,80 +465,38 @@ GetROS2PackageDict () {
     return 0
 }
 
-
-# GetRepoInfoList yaml_file_path {packages} name_arr desc_arr url_arr
-GetRepoInfoList () {
-    local yaml_file_path_=$1
-    local repo_type_=$2
-    local -n name_arr_=$3
-    local -n desc_arr_=$4
-    local -n url_arr_=$5
-
-    PrintDebug "[GetRepoInfoList] Getting the ${repo_type_} info from ${yaml_file_path_} ..."
-
-    # Check repos info
-    local repos_info_=$(yaml_repo_info "${yaml_file_path_}" "['${repo_type_}']")
-    if [ -z "${repos_info_}" ]; then
-        PrintError "[GetRepoInfoList] The ${repo_type_} info under ${yaml_file_path_} is not correctly loaded."
-        return 1
-    fi
-
-    while read -r repos_info_str_; do
-        # <repo_name>`<repo_desc>`<repo_url>|<repo_name>`<repo_desc>`<repo_url>|...|<repo_name>`<repo_desc>`<repo_url>
-        IFS='|' read -r -a repo_info_arr_ <<< "$repos_info_str_"
-        PrintDebug "$(declare -p repo_info_arr_)"
-        for repo_info_ in "${repo_info_arr_[@]}"; do
-            # <repo_name>`<repo_desc>`<repo_url>
-            IFS='\`' read -r -a repo_info_kv_ <<< "$repo_info_"
-            if [ ${#repo_info_kv_[@]} -ne 3 ]; then
-                PrintWarning "[GetRepoInfoList] Invalid repo info format: ${repo_info_}. The format should be <name>\`<desc>\`<url>."
-                continue
-            fi
-
-            name_arr_+=("${repo_info_kv_[0]}")
-            desc_arr_+=("${repo_info_kv_[1]}")
-            url_arr_+=("${repo_info_kv_[2]}")
-        done
-    done <<< "${repos_info_}"
-
-    PrintSuccess "[GetRepoInfoList] The ${repo_type_} info is correctly loaded."
-    return 0
-}
-
 CheckRepoList () {
     PrintDebug "[CheckRepoList] Checking the repo list..."
-
-    if [ ! -f "${STARTUP_CONTENT_PATH}/packages.yaml" ]; then
-        PrintWarning "[CheckRepoList] The ${STARTUP_CONTENT_PATH}/packages.yaml does not exist. Try updating..."
+    local yaml_file_path=${STARTUP_CONTENT_PATH}/packages.yaml
+    if [ ! -f "${yaml_file_path}" ]; then
+        PrintWarning "[CheckRepoList] The ${yaml_file_path} does not exist. Try updating..."
         if ! UpdateRepoList; then
             PrintError "[CheckRepoList] The repo list is not correctly fetched."
             return 1
         fi
     fi
 
-    if [ ${REPO_NEED_UPDATE} -eq 0 ]; then
-        PrintSuccess "[CheckRepoList] The repo list is already updated."
-        return 0
-    fi
-
-    local get_status=0
-    GetRepoInfoList "${STARTUP_CONTENT_PATH}/packages.yaml" "packages" REPO_PKG_NAME_ARR REPO_PKG_DESC_ARR REPO_PKG_URL_ARR
-    if [ ${#REPO_PKG_NAME_ARR[@]} -eq 0 ] || [ ${#REPO_PKG_NAME_ARR[@]} -ne ${#REPO_PKG_DESC_ARR[@]} ] || [ ${#REPO_PKG_NAME_ARR[@]} -ne ${#REPO_PKG_URL_ARR[@]} ]; then
-        PrintWarning "[CheckRepoList] The package list is not correctly loaded."
-        get_status=1
-    fi
-
-    PrintDebug "$(declare -p REPO_PKG_NAME_ARR)"
-    PrintDebug "$(declare -p REPO_PKG_DESC_ARR)"
-    PrintDebug "$(declare -p REPO_PKG_URL_ARR)"
-
-    REPO_NEED_UPDATE=0
-    if [ ${get_status} -eq 1 ]; then
-        PrintWarning "[CheckRepoList] The repo list is deployed with some errors."
+    local ret_status=0
+    local yaml_str=$(yaml_repo_info "${yaml_file_path}" "['packages']")
+    if [ -n "${yaml_str}" ]; then
+        IFS='|' read -r -a repo_arr <<< "${yaml_str}"
+        for repo in "${repo_arr[@]}"; do
+            IFS='\`' read -r -a repo_info_arr <<< "${repo}" # repo_name, repo_desc, repo_url, packages, ...
+            REPO_DESC_ARR["${repo_info_arr[0]}"]="${repo_info_arr[1]}"
+            REPO_URL_ARR["${repo_info_arr[0]}"]="${repo_info_arr[2]}"
+            for ((i=3; i<${#repo_info_arr[@]}; i++)); do
+                PKG_REPO_ARR[${repo_info_arr[$i]}]=${repo_info_arr[0]}
+            done
+        done
     else
-        PrintSuccess "[CheckRepoList] The repo list is correctly deployed."
+        PrintError "[CheckRepoList] The repo list under ${yaml_file_path} is not correctly loaded."
+        ret_status=1
     fi
-    return 0
+
+    PrintDebug "$(declare -p REPO_DESC_ARR)"
+    PrintDebug "$(declare -p REPO_URL_ARR)"
+    PrintDebug "$(declare -p PKG_REPO_ARR)"
+    return ${ret_status}
 }
 
 
@@ -867,9 +821,15 @@ RemoveServiceFile () {
     else
         local service_paths=$(find ${STARTUP_PKG_SERVICES_PATH} -maxdepth 1 -type f -name "*.service")
         for service_path in ${service_paths}; do
-            local pkg_launcher_name=$(basename ${service_path} | grep -Po "(?<=^${STARTUP_NAME}_)[a-z0-9_]+(?=.service$)")
-            local pkg_name=$(echo ${pkg_launcher_name} | grep -Po "^[a-z0-9_]+(?=_.*$)")
-            local pkg_id=$(echo ${pkg_launcher_name} | grep -Po "(?<=_)[a-z0-9]+$")
+            local pkg_launcher_name=$(basename ${service_path} | grep -Po "(?<=^${STARTUP_NAME}_)${VALID_PACKAGE_REGEX}_${VALID_PACKAGE_ID_REGEX}(?=.service$)")
+            if [ -z "${pkg_launcher_name}" ]; then continue; fi
+
+            local pkg_name=$(echo ${pkg_launcher_name} | grep -Po "^${VALID_PACKAGE_REGEX}(?=_${VALID_PACKAGE_ID_REGEX}$)")
+            if [ -z "${pkg_name}" ]; then continue; fi
+
+            local pkg_id=$(echo ${pkg_launcher_name} | grep -Po "(?<=_)${VALID_PACKAGE_ID_REGEX}$")
+            if [ -z "${pkg_id}" ]; then continue; fi
+
             RemoveServiceFile_ ${pkg_name} ${pkg_id}
         done
     fi
@@ -1084,15 +1044,12 @@ BuildPackage () {
 RestoreRepos () {
     PrintDebug "[RestoreRepos] Restoring the repos to the current commit..."
 
-    CheckRepoList
-    if [ $? -ne 0 ]; then
+    if ! CheckRepoList; then
         PrintError "[RestoreRepos] The repo list is not correctly deployed."
         return 1
     fi
 
-    local repos_name=()
-    repos_name+=("${REPO_PKG_NAME_ARR[@]}")
-    for repo_name in ${repos_name[@]}; do
+    for repo_name in "${!REPO_URL_ARR[@]}"; do
         # Check if the repo is a directory and exist .git directory
         if [ ! -d "${ROS2_WS_SRC_PATH}/${repo_name}/.git" ]; then
             PrintWarning "[RestoreRepos] The repo ${repo_name} does not exist git control."
@@ -1113,22 +1070,14 @@ RestoreRepos () {
 UpdateRepos () {
     PrintDebug "[UpdateRepos] Updating the repos..."
 
-    CheckRepoList
-    if [ $? -ne 0 ]; then
+    if ! CheckRepoList; then
         PrintError "[UpdateRepos] The repo list is not correctly deployed."
         return 1
     fi
-    # Read list to array
-    local repos_name=()
-    repos_name+=("${REPO_PKG_NAME_ARR[@]}")
 
-    local repos_url=()
-    repos_url+=("${REPO_PKG_URL_ARR[@]}")
+    for repo_name in "${!REPO_URL_ARR[@]}"; do
+        local repo_url=${REPO_URL_ARR["${repo_name}"]}
 
-    local len=${#repos_name[@]}
-    for (( i=0; i<${len}; i++ )); do
-        local repo_name=${repos_name[$i]}
-        local repo_url=${repos_url[$i]}
         # Check if the repo is a directory and exist .git directory
         if [ ${CLEAN_FLAG} -eq 1 ] || [ ! -d "${ROS2_WS_SRC_PATH}/${repo_name}/.git" ]; then
             rm -rf ${ROS2_WS_SRC_PATH}/${repo_name}
@@ -1156,20 +1105,19 @@ UpdateRepoList () {
 
     if wget -q -O ${STARTUP_CONTENT_PATH}/packages.yaml ${ftp_server_path}/packages.yaml; then
         PrintSuccess "[UpdateRepoList] The repo list is fetched successfully."
-        REPO_NEED_UPDATE=1
-    else
-        PrintError "[UpdateRepoList] The repo list is not fetched successfully."
-        return 1
+        return 0
     fi
-    return 0
+
+    PrintError "[UpdateRepoList] The repo list is not fetched successfully."
+    return 1
 }
 
-# The function will list the package launcher and repos.
+# The function will list the package launcher and ROS2 packages.
 List () {
-    PrintDebug "[List] Listing the package launcher and repos..."
+    PrintDebug "[List] Listing the package launcher and ROS2 packages..."
 
-    # ${LIST_MODE}: all, repos, scripts, services
-    if [ "${LIST_MODE}" != "all" ] && [ "${LIST_MODE}" != "repos" ] && [ "${LIST_MODE}" != "scripts" ] && [ "${LIST_MODE}" != "services" ]; then
+    # ${LIST_MODE}: all, pkgs, scripts, services
+    if [ "${LIST_MODE}" != "all" ] && [ "${LIST_MODE}" != "pkgs" ] && [ "${LIST_MODE}" != "scripts" ] && [ "${LIST_MODE}" != "services" ]; then
         PrintError "[List] The list mode is not valid."
         return 1
     fi
@@ -1185,7 +1133,6 @@ List () {
     PrintDebug "$(declare -p pkg_islocal_dict)"
 
     # The two dicts describe the package launcher status. Package launcher: <package_name>_<id>
-    # Relation between the package and the repo.
     local -A pkg_launcher_dict # { <package_name>_<id> : <pkg_name> }
     # Whether package launcher have service file.
     local -A pkg_launcher_status_dict # { <package_name>_<id> : {0|1} }
@@ -1236,45 +1183,36 @@ List () {
     ######## The following process requires the repo list ########
 
     SILENT_MODE=1
-    # Check repo list
-    CheckRepoList
-    SILENT_MODE=0
-
-    if [ $? -ne 0 ]; then
+    if ! CheckRepoList; then
+        SILENT_MODE=0
         PrintError "[List] The repo list is not correctly deployed."
         return 1
     fi
+    SILENT_MODE=0
 
-    # The two dicts are the union of the keys of the ${pkg_path_dict} and ${REPO_PKG_NAME_ARR}
-    local -A repo_tracked_dict # { <pkg_name> : {0|1} }
-    local -A repo_fetched_dict # { <pkg_name> : {0|1} }
-
-    # Packages in ${ROS2_WS_SRC_PATH} and ${ROS2_DEFAULT_SHARE_PATH}
+    # Packages in ${ROS2_WS_SRC_PATH} or ${ROS2_DEFAULT_SHARE_PATH}
+    local -A pkg_status_dict # { <pkg_name> : {0|1|2|3} }
     for pkg_name in "${!pkg_path_dict[@]}"; do
-        if element_exists "${pkg_name}" "${REPO_PKG_NAME_ARR[@]}"; then
-            # The repo under ${ROS2_WS_SRC_PATH} is tracked in the repo list and fetched.
-            repo_tracked_dict["${pkg_name}"]=1
-            repo_fetched_dict["${pkg_name}"]=1
-        else
-            # The repo under ${ROS2_WS_SRC_PATH} is not tracked in the repo list.
-            repo_tracked_dict["${pkg_name}"]=0
-            repo_fetched_dict["${pkg_name}"]=0
+        pkg_status_dict["${pkg_name}"]=0
+        if [ ${pkg_islocal_dict["${pkg_name}"]} -eq 1 ]; then # Package is local.
+            pkg_status_dict["${pkg_name}"]=$(( pkg_status_dict["${pkg_name}"] + 1 ))
+            if element_exists "${pkg_name}" "${!PKG_REPO_ARR[@]}"; then # Package in packages.yaml.
+                pkg_status_dict["${pkg_name}"]=$(( pkg_status_dict["${pkg_name}"] + 2 ))
+            fi
         fi
     done
 
-    # Packages in ${REPO_PKG_NAME_ARR}
-    for pkg_name in "${REPO_PKG_NAME_ARR[@]}"; do
-        if ! element_exists "${pkg_name}" "${!pkg_path_dict[@]}"; then
-            # The repo in the repo list is not found under ${ROS2_WS_SRC_PATH}.
-            repo_tracked_dict["${pkg_name}"]=1
-            repo_fetched_dict["${pkg_name}"]=0
+    # Packages in packages.yaml
+    for pkg_name in "${!PKG_REPO_ARR[@]}"; do
+        if ! element_exists "${pkg_name}" "${!pkg_path_dict[@]}"; then # Package tracked but not fetched.
+            pkg_status_dict["${pkg_name}"]=2
         fi
     done
 
-    # Print list for 'all' and 'repos' mode.
-    if [ "${LIST_MODE}" == "repos" ]; then
-        for pkg_name in "${!repo_tracked_dict[@]}"; do
-            PrintValue "${pkg_name} ${repo_tracked_dict["${pkg_name}"]} ${repo_fetched_dict["${pkg_name}"]}"
+    # Print list for 'all' and 'pkgs' mode.
+    if [ "${LIST_MODE}" == "pkgs" ]; then
+        for pkg_name in "${!pkg_status_dict[@]}"; do
+            PrintValue "${pkg_name} ${pkg_status_dict["${pkg_name}"]}"
         done
     elif [ "${LIST_MODE}" == "all" ]; then
         local printed_pkg_name=()
@@ -1283,22 +1221,19 @@ List () {
         for pkg_launcher_name in "${!pkg_launcher_status_dict[@]}"; do
             local pkg_status=${pkg_launcher_status_dict["${pkg_launcher_name}"]}
             local pkg_name=${pkg_launcher_dict["${pkg_launcher_name}"]}
-            local repo_tracked=${repo_tracked_dict["${pkg_name}"]}
-            local repo_fetched=${repo_fetched_dict["${pkg_name}"]}
+            local repo_status=${pkg_status_dict["${pkg_name}"]}
             if ! element_exists "${pkg_name}" "${printed_pkg_name[@]}"; then
                 printed_pkg_name+=("${pkg_name}")
             fi
-            PrintValue "${pkg_launcher_name} ${pkg_status} ${pkg_name} ${repo_tracked} ${repo_fetched}"
+            PrintValue "${pkg_launcher_name} ${pkg_status} ${pkg_name} ${repo_status}"
         done
 
         # Then print rest of the packages
-        for pkg_name in "${!repo_tracked_dict[@]}"; do
+        for pkg_name in "${!pkg_status_dict[@]}"; do
             if element_exists "${pkg_name}" "${printed_pkg_name[@]}"; then
                 continue
             fi
-            local repo_tracked=${repo_tracked_dict["${pkg_name}"]}
-            local repo_fetched=${repo_fetched_dict["${pkg_name}"]}
-            PrintValue "- 0 ${pkg_name} ${repo_tracked} ${repo_fetched}"
+            PrintValue "- 0 ${pkg_name} ${pkg_status_dict["${pkg_name}"]}"
         done
     fi
 
@@ -1332,7 +1267,7 @@ SetupModeCheck () {
         PrintError "[SetupModeCheck] The setup mode is not valid: ${SETUP_MODE}."
         return 1
     fi
-    return 0
+    return $?
 }
 
 
