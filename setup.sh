@@ -729,9 +729,22 @@ CreateServiceFile () {
         echo "" >> ${pkg_launcher_path}/runfile.sh
     fi
 
+    # Startup location
+    local startup_location=$(yaml ${system_path} "['launch']['startup_location']")
+    if [ -n "${startup_location}" ]; then
+        if [[ "${startup_location}" == "\${HOME}" ]]; then
+            startup_location=${HOME}
+        fi
+    fi
+
     # Finish the runfile.sh
     echo "export HOME=${HOME}" >> ${pkg_launcher_path}/runfile.sh
-    echo "cd ${HOME}" >> ${pkg_launcher_path}/runfile.sh
+
+    if [ -n "${startup_location}" ]; then
+        echo "cd ${startup_location}" >> ${pkg_launcher_path}/runfile.sh
+    fi
+
+    echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ${pkg_launcher_path}/runfile.sh
 
     if [ ${is_local} -eq 1 ]; then
         echo "source ${ROS2_WS_PATH}/install/setup.bash" >> ${pkg_launcher_path}/runfile.sh
