@@ -731,6 +731,7 @@ CreateServiceFile () {
 
     # Finish the runfile.sh
     echo "export HOME=${HOME}" >> ${pkg_launcher_path}/runfile.sh
+    echo "cd ${HOME}" >> ${pkg_launcher_path}/runfile.sh
 
     if [ ${is_local} -eq 1 ]; then
         echo "source ${ROS2_WS_PATH}/install/setup.bash" >> ${pkg_launcher_path}/runfile.sh
