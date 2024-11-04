@@ -685,6 +685,12 @@ CreateServiceFile () {
         use_root=False
     fi
 
+    local gui_mode=$(yaml ${system_path} "['launch']['gui_mode']")
+    if [ -z "${gui_mode}" ]; then
+        PrintWarning "[CreateServiceFile] The gui_mode is not provided in the ${system_path}. Default to False."
+        gui_mode=False
+    fi
+
     # The interface should be provided
     local interface=$(yaml ${system_path} "['network']['interface']")
     if [ -z "${interface}" ]; then
@@ -706,6 +712,10 @@ CreateServiceFile () {
         PrintError "[CreateServiceFile] The interface ${interface} is not valid."
         return 1
     fi
+
+    # Overwrite the `devInterface` under `params.yaml` with the provided interface
+    # The devInterface pattern: '(^ *devInterface: *)"[a-z0-9]+"'
+    sed -i "s/\(^ *devInterface: *\)\"[a-z0-9]*\"/\1\"${interface}\"/g" ${pkg_launcher_path}/${params_file}
 
     # use_internet should be True or False
     local use_internet=$(yaml ${system_path} "['network']['internet_required']")
@@ -770,6 +780,10 @@ CreateServiceFile () {
 
     echo "[Unit]" > ${service_file}
     echo "Description=${service_name}" >> ${service_file}
+    if [ "${gui_mode}" == "True" ]; then
+        echo "PartOf=graphical.target" >> ${service_file}
+        echo "After=graphical.target" >> ${service_file}
+    fi
     echo "" >> ${service_file}
     echo "[Service]" >> ${service_file}
 
@@ -778,12 +792,27 @@ CreateServiceFile () {
         echo "Group=${user_group}" >> ${service_file}
     fi
 
+    if [ "${gui_mode}" == "True" ]; then
+        echo "Environment=DISPLAY=:0.0" >> ${service_file}
+    fi
+
     echo "Type=simple" >> ${service_file}
     echo "ExecStart=${pkg_launcher_path}/runfile.sh ${interface}" >> ${service_file}
-    echo "Restart=always" >> ${service_file}
+
+    if [ "${gui_mode}" == "True" ]; then
+        echo "Restart=no" >> ${service_file}
+    else
+        echo "Restart=always" >> ${service_file}
+    fi
+
     echo "" >> ${service_file}
     echo "[Install]" >> ${service_file}
-    echo "WantedBy=multi-user.target" >> ${service_file}
+
+    if [ "${gui_mode}" == "True" ]; then
+        echo "WantedBy=graphical.target" >> ${service_file}
+    else
+        echo "WantedBy=multi-user.target" >> ${service_file}
+    fi
 
     # Copy service file to /etc/systemd/system and enable the service
     sudo chmod 644 ${service_file} 2>&1 | PrintDebug
@@ -1031,7 +1060,7 @@ BuildPackage () {
     local pkg_str=$(echo "${build_pkg_set[@]}")
     PrintInfo "[BuildPackage] Building the package: [${pkg_str}]"
     if colcon --log-base ${log_path} build --cmake-args -DPython3_EXECUTABLE="${PYTHON3_PATH}" --build-base ${build_path} --install-base ${inst_path} --base-paths ${ROS2_WS_PATH} --packages-select ${pkg_str} --symlink-install 2>&1 | PrintDebug; then
-        PrintSuccess "[BuildPackage] The package is built successfully."
+        PrintSuccess "[BuildPackage] The package is built successfully." # TODO: fix build return status (always 0 while piped to PrintDebug)
     else
         PrintError "[BuildPackage] The package is not built successfully."
         return 1
