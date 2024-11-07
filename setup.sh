@@ -297,7 +297,19 @@ element_exists ()
     return 1
 }
 
-
+# cvt_yaml_str_to_arr yaml_str out_arr
+cvt_yaml_str_to_arr ()
+{
+    local -n out_arr_=$2
+    IFS='|' read -r -a yaml_dict_arr <<< "$1"
+    for yaml_dict in "${yaml_dict_arr[@]}"; do
+        IFS='\`' read -r -a yaml_kv_arr <<< "$yaml_dict"
+        if [ ${#yaml_kv_arr[@]} -ne 2 ]; then
+            continue
+        fi
+        out_arr_["${yaml_kv_arr[0]}"]=${yaml_kv_arr[1]}
+    done
+}
 
 
 
@@ -695,6 +707,19 @@ CreateServiceFile () {
         gui_mode=False
     fi
 
+
+
+    local launch_params_str=""
+    local launch_params_yaml_str=$(yaml_custom_print ${system_path} "['launch_params']")
+    if [ -n "${launch_params_yaml_str}" ]; then
+        local -A launch_params_dict
+        cvt_yaml_str_to_arr "${launch_params_yaml_str}" launch_params_dict
+
+        for key in "${!launch_params_dict[@]}"; do
+            launch_params_str="${launch_params_str} ${key}:=${launch_params_dict["${key}"]}"
+        done
+    fi
+
     # The interface should be provided
     local interface=$(yaml ${system_path} "['network']['interface']")
     if [ -z "${interface}" ]; then
@@ -767,9 +792,9 @@ CreateServiceFile () {
     fi
 
     if [ ${use_config} -eq 0 ]; then
-        echo "ros2 launch ${PACKAGE_NAME} ${launch_file} params_file:=${pkg_launcher_path}/${params_file}" >> ${pkg_launcher_path}/runfile.sh
+        echo "ros2 launch ${PACKAGE_NAME} ${launch_file} params_file:=${pkg_launcher_path}/${params_file} ${launch_params_str}" >> ${pkg_launcher_path}/runfile.sh
     else
-        echo "ros2 launch ${PACKAGE_NAME} ${launch_file} config_path:=${pkg_launcher_path}/${params_file}" >> ${pkg_launcher_path}/runfile.sh
+        echo "ros2 launch ${PACKAGE_NAME} ${launch_file} config_path:=${pkg_launcher_path}/${params_file} ${launch_params_str}" >> ${pkg_launcher_path}/runfile.sh
     fi
     echo "sleep 5" >> ${pkg_launcher_path}/runfile.sh
     sudo chmod a+x ${pkg_launcher_path}/runfile.sh 2>&1 | PrintDebug
