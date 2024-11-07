@@ -1,0 +1,15 @@
+<CycloneDDS>
+
+ <Domain>
+
+ <General>
+
+  <NetworkInterfaceAddress>eno1</NetworkInterfaceAddress>
+
+    <DontRoute>true</DontRoute>
+
+</General>
+
+</Domain>
+
+</CycloneDDS>

@@ -783,7 +783,15 @@ CreateServiceFile () {
         echo "cd ${startup_location}" >> ${pkg_launcher_path}/runfile.sh
     fi
 
+    # Cyclone DDS setup
+    cp ${STARTUP_CONTENT_PATH}/scripts/cyclonedds.xml ${pkg_launcher_path}/cyclonedds.xml
+
+    # Overwrite the interface under Cyclone DDS settings
+    # interface pattern: '(<NetworkInterfaceAddress>)[a-z0-9]*(</NetworkInterfaceAddress>)'
+    sed -i "s|\(<NetworkInterfaceAddress>\)[a-z0-9]*\(</NetworkInterfaceAddress>\)|\1${interface}\2|g" ${pkg_launcher_path}/cyclonedds.xml
+
     echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ${pkg_launcher_path}/runfile.sh
+    echo "export CYCLONEDDS_URI=${pkg_launcher_path}/cyclonedds.xml" >> ${pkg_launcher_path}/runfile.sh
 
     if [ ${is_local} -eq 1 ]; then
         echo "source ${ROS2_WS_PATH}/install/setup.bash" >> ${pkg_launcher_path}/runfile.sh
