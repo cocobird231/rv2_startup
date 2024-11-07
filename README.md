@@ -337,7 +337,7 @@ packages:
     Build the ROS2 workspace. The ROS2 workspace will be built according to the packages in the `rv2_startup/launch/scripts`.
 
     - **`--clean`**: Clean the `build`, `install` and `log` directories before building.
-    - **`--depend`**: Force install the dependencies before building.
+    - **`--depend`**: Force install the dependencies before building (include `rosdep install`).
 
 - **`restore-repos`**:
 

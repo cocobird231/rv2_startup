@@ -579,6 +579,10 @@ CreatePackageFile () {
     fi
 
     local system_path=${repo_path}/params/system.yaml
+    if [ ${use_config} -eq 1 ]; then
+        system_path=${repo_path}/config/system.yaml
+    fi
+
     if [ ! -f "${system_path}" ]; then
         PrintWarning "[CreatePackageFile] The ${system_path} does not exist. Create a new one under ${pkg_launcher_path} ..."
         local system_file=${pkg_launcher_path}/system.yaml
@@ -1057,6 +1061,11 @@ BuildPackage () {
         sudo rm -rf ${build_path} ${inst_path} ${log_path}
     fi
 
+    if [ ${DEPEND_FLAG} -eq 1 ]; then
+        PrintInfo "[BuildPackage] Installing rosdep dependencies..."
+        rosdep install --from-paths ${ROS2_WS_SRC_PATH} --ignore-src -r -y
+    fi
+
     local pkg_str=$(echo "${build_pkg_set[@]}")
     PrintInfo "[BuildPackage] Building the package: [${pkg_str}]"
     if colcon --log-base ${log_path} build --cmake-args -DPython3_EXECUTABLE="${PYTHON3_PATH}" --build-base ${build_path} --install-base ${inst_path} --base-paths ${ROS2_WS_PATH} --packages-select ${pkg_str} --symlink-install 2>&1 | PrintDebug; then
@@ -1124,7 +1133,7 @@ UpdateRepos () {
         # Check if the repo is a directory and exist .git directory
         if [ ${CLEAN_FLAG} -eq 1 ] || [ ! -d "${ROS2_WS_SRC_PATH}/${repo_name}/.git" ]; then
             rm -rf ${ROS2_WS_SRC_PATH}/${repo_name}
-            git clone ${repo_url} ${ROS2_WS_SRC_PATH}/${repo_name} 2>&1 | PrintDebug
+            git clone --recursive ${repo_url} ${ROS2_WS_SRC_PATH}/${repo_name} 2>&1 | PrintDebug
             if [ $? -ne 0 ]; then
                 PrintWarning "[UpdateRepos] The repo ${repo_name} is not correctly cloned."
             fi
