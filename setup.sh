@@ -787,8 +787,11 @@ CreateServiceFile () {
     cp ${STARTUP_CONTENT_PATH}/scripts/cyclonedds.xml ${pkg_launcher_path}/cyclonedds.xml
 
     # Overwrite the interface under Cyclone DDS settings
-    # interface pattern: '(<NetworkInterfaceAddress>)[a-z0-9]*(</NetworkInterfaceAddress>)'
-    sed -i "s|\(<NetworkInterfaceAddress>\)[a-z0-9]*\(</NetworkInterfaceAddress>\)|\1${interface}\2|g" ${pkg_launcher_path}/cyclonedds.xml
+    # interface pattern: '(<NetworkInterface +name *= *")[a-z0-9]*(" +/>)'
+    if ! sed -i "s|\(<NetworkInterface \+name *= *\"\)[a-z0-9]*\(\" */>\)|\1${interface}\" />|g" ${pkg_launcher_path}/cyclonedds.xml; then
+        PrintError "[CreateServiceFile] The interface ${interface} is not correctly set in the ${pkg_launcher_path}/cyclonedds.xml."
+        return 1
+    fi
 
     echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ${pkg_launcher_path}/runfile.sh
     echo "export CYCLONEDDS_URI=${pkg_launcher_path}/cyclonedds.xml" >> ${pkg_launcher_path}/runfile.sh
